@@ -22,72 +22,54 @@ use channel::PushChan;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-async fn map_operator(input: PullChan<i32>, f: fn(i32) -> i32, output: PushChan<i32>) {
+use std::any::{Any, TypeId};
+
+async fn map_operator<T>(input: PullChan<T>, f: fn(T) -> T, output: PushChan<T>) {
     loop {
         let x = input.pull().await;
         let y = f(x);
         output.push(y).await;
     }
 }
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum Event<i32> {
-    Data(i32),
-    Marker,
-}
+
 #[derive(Serialize, Deserialize)]
-enum SumState<i32> {
+
+enum Event<T> {
+    Data(T),
+    Marker
+}
+enum MapState<T> {
     S0 {
-        input: PullChan<Event<i32>>,
-        output: PushChan<Event<i32>>,
-        sum: i32,
+        input: PullChan<Event<T>>,
+        output: PushChan<Event<T>>,
     },
 }
 
-async fn sum_impl(mut state: SumState<i32>) {
-    loop {
-        state = match state {
-            SumState::S0 { input, output, sum } =>
-            {
-                match input.pull().await {
-                    Event::Data(data) => {
-                        let sum = sum + data;
-                        output.push(Event::Data(sum)).await;
-                        SumState::S0 { input, output, sum }
-                    }
-                    Event::Marker => {
-                        /* snapshop 
-                        1. pull the whole queue
-                        2. serialize
-                        3. save
-                        */
-                        
-                        let queue = input.get_buffer().await;
-                        println!("The buffer to save to disk is: {:?}",queue);
-
-                        output.push(Event::Data(1)).await;
-                        SumState::S0 { input, output, sum }
-                    }
+async fn map_operator_transition<T>(mut state: MapState<T>) {
+//    loop{
+        if let MapState::S0 { input, output } = state {
+            match input.pull().await {
+                Event::Data(data) => {
+                    let y = 1;
+                    let z = Event::Data(y);
+                    output.push(z).await;
+                    MapState::S0 { input, output };                
                 }
+                Event::Marker => { /* snapshot */ }
             }
         }
-    }
+//    }
 }
 
-fn sum(input: PullChan<Event<i32>>) -> PullChan<Event<i32>> {
-    let (push, pull) = channel::<Event<i32>>();
-    let state = SumState::S0 {
+fn map<T: 'static>(input: PullChan<Event<T>>) -> PullChan<Event<T>> {
+    let (push, pull) = channel();
+    let state = MapState::S0 {
         input,
         output: push,
-        sum: 0,
     };
-    tokio::task::spawn(sum_impl(state));
+    tokio::task::spawn(map_operator_transition(state));
     pull
 }
-
-async fn producer_op(input: PullChan<i32>) -> PullChan<i32> {
-    todo!();
-}
-
 #[test]
 fn test() {
     console_subscriber::init();
@@ -96,16 +78,12 @@ fn test() {
         .unwrap()
         .block_on(async {
             let (w, r) = channel();
-            let r2 = sum(r);
-            w.push(Event::Data(2)).await;
-            w.push(Event::Marker).await;
-            w.push(Event::Data(3)).await;
+            let r2 = map(r);
+            w.push(2).await;
+            //w.push(2).await;
             let x = r2.pull().await;
-            println!("Result of x: {:?}", x);
-            assert!(x == Event::Data(2));
-            let y = r2.pull().await;
-            println!("Result of y: {:?}", y);
-            assert!(y == Event::Data(1));
+            //println!("Result of x: {}", x);
+            assert!(x == 2);
         })
 }
 

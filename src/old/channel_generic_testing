@@ -37,7 +37,7 @@ pub fn channel<T>() -> (PushChan<T>, PullChan<T>) {
     (PushChan(chan.clone()), PullChan(chan))
 }
 
-impl<T:Clone> PushChan<T> {
+impl<T> PushChan<T> {
     pub async fn push(&self, data: T) {
         let mut queue = self.0.queue.lock().await;
         while queue.len() == queue.capacity() {
@@ -48,7 +48,7 @@ impl<T:Clone> PushChan<T> {
     }
 }
 
-impl<T:Clone> PullChan<T> {
+impl<T> PullChan<T> {
     pub async fn pull(&self) -> T {
         let mut queue = self.0.queue.lock().await;
         while queue.is_empty() {
@@ -58,11 +58,8 @@ impl<T:Clone> PullChan<T> {
         self.0.pushvar.notify_one();
         data
     }
-    pub async fn get_buffer(&self) -> Vec<T> {
-        let queue = self.0.queue.lock().await;
-        queue.iter().cloned().collect()
-    }
 }
+
 
 #[test]
 fn test() {
