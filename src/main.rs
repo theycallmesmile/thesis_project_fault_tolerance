@@ -4,6 +4,7 @@ extern crate tokio;
 use std::ptr::eq;
 use std::str;
 
+use async_std::stream::Sum;
 use rskafka::time;
 use tokio::fs::File;
 use tokio::fs::OpenOptions;
@@ -34,38 +35,43 @@ enum Event<i32> {
     Data(i32),
     Marker,
 }
-#[derive(Serialize, Deserialize)]
-enum SumState<i32> {
+#[derive(Serialize, Deserialize, Debug)]
+enum ProducerState {
     S0 {
-        input: PullChan<Event<i32>>,
-        output: PushChan<Event<i32>>,
-        sum: i32,
+        output: PushChan<Event<()>>,
+        count: i32,
     },
 }
 
-async fn sum_impl(mut state: SumState<i32>) {
+#[derive(Serialize, Deserialize, Debug)]
+enum ConsumerState {
+    S0 {
+        input: PullChan<Event<()>>,
+        count: i32,
+    },
+}
+
+async fn consumer_impl(mut state: ConsumerState) {
     loop {
         state = match state {
-            SumState::S0 { input, output, sum } =>
-            {
+            ConsumerState::S0 { input, count } => {
                 match input.pull().await {
                     Event::Data(data) => {
-                        let sum = sum + data;
-                        output.push(Event::Data(sum)).await;
-                        SumState::S0 { input, output, sum }
+                        let count = count + 1;
+                        println!("Consumer count is: {}", count);
+                        ConsumerState::S0 { input, count }
                     }
                     Event::Marker => {
-                        /* snapshop 
+                        /* snapshop
                         1. pull the whole queue
                         2. serialize
                         3. save
                         */
-                        
-                        let queue = input.get_buffer().await;
-                        println!("The buffer to save to disk is: {:?}",queue);
 
-                        output.push(Event::Data(1)).await;
-                        SumState::S0 { input, output, sum }
+                        let queue = input.get_buffer().await;
+                        println!("The buffer to save to disk is: {:?}", queue);
+
+                        ConsumerState::S0 { input, count }
                     }
                 }
             }
@@ -73,100 +79,36 @@ async fn sum_impl(mut state: SumState<i32>) {
     }
 }
 
-fn sum(input: PullChan<Event<i32>>) -> PullChan<Event<i32>> {
-    let (push, pull) = channel::<Event<i32>>();
-    let state = SumState::S0 {
-        input,
+async fn producer_impl(mut state: ProducerState) {
+    loop {
+        println!("Inside producer loop!");
+        state = match state {
+            ProducerState::S0 { output, count } => {
+                let count = count + 1;
+                output.push(Event::Data(())).await;
+                ProducerState::S0 { output, count }
+            }
+        }
+    }
+}
+
+fn producer() -> PullChan<Event<()>> {
+    let (push, pull) = channel::<Event<()>>();
+    let state = ProducerState::S0 {
         output: push,
-        sum: 0,
+        count: 0,
     };
-    tokio::task::spawn(sum_impl(state));
+    async_std::task::spawn(producer_impl(state));
+    println!("producer operator spawned!");
     pull
 }
 
-async fn producer_op(input: PullChan<i32>) -> PullChan<i32> {
-    todo!();
+fn consumer(input: PullChan<Event<()>>) {
+    let state = ConsumerState::S0 { input, count: 0 };
+    async_std::task::spawn(consumer_impl(state));
+    println!("sum_impl operator spawned!");
 }
 
-#[test]
-fn test() {
-    console_subscriber::init();
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let (w, r) = channel();
-            let r2 = sum(r);
-            w.push(Event::Data(2)).await;
-            w.push(Event::Marker).await;
-            w.push(Event::Data(3)).await;
-            let x = r2.pull().await;
-            println!("Result of x: {:?}", x);
-            assert!(x == Event::Data(2));
-            let y = r2.pull().await;
-            println!("Result of y: {:?}", y);
-            assert!(y == Event::Data(1));
-        })
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-enum State1 {
-    S1(String, String, i32),
-    S2(String, String, String),
-}
-
-async fn execute_func(mut s: State1) {
-    s = match s {
-        State1::S1(_, _, _) => State1::S1("in1".to_string(), "out1".to_string(), 1),
-        State1::S2(_, _, _) => State1::S2("in2".to_string(), "out2".to_string(), "f2".to_string()),
-    };
-    println!("{:?}", s);
-    store_func(s).await;
-}
-
-async fn load_func() -> State1 {
-    let mut contents = vec![];
-
-    let file = OpenOptions::new().read(true).open("foo.txt").await;
-
-    file.unwrap().read_to_end(&mut contents).await.unwrap();
-
-    let checkpoint_serialized = std::str::from_utf8(&contents).unwrap().to_string();
-
-    let checkpoint_deserialized = deserialize_func(checkpoint_serialized).await;
-
-    return checkpoint_deserialized;
-}
-
-async fn recover_func() {
-    execute_func(load_func().await).await;
-}
-
-async fn serialize_func(s: State1) -> String {
-    let serialized = serde_json::to_string(&s).unwrap();
-    return serialized;
-}
-
-async fn deserialize_func(s: String) -> State1 {
-    let deserialized: State1 = serde_json::from_str(&s).unwrap();
-    return deserialized;
-}
-
-async fn store_func(s: State1) {
-    //Serialize the state
-    let serialized_state = serialize_func(s).await;
-    //Saving checkpoint to file (appends atm)
-    let file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open("foo.txt")
-        .await;
-    file.unwrap()
-        .write_all(serialized_state.as_bytes())
-        .await
-        .unwrap();
-}
 impl<T: Serialize> Serialize for PushChan<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -219,9 +161,14 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for PullChan<T> {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    let mut stateTest = State1::S2("In".to_string(), "Out".to_string(), "f".to_string());
-    execute_func(stateTest).await;
-    //recover_func();
+async fn boot_up_func() {
+    console_subscriber::init();
+    let stream = producer();
+    consumer(stream);
+}
+
+//#[tokio::main]
+//#[async_std::main]
+fn main() {
+    async_std::task::block_on(boot_up_func());
 }

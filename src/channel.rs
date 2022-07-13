@@ -3,10 +3,9 @@ use tokio::sync::Notify;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use async_std::sync::{Mutex, Condvar};
-use async_std::task;
+use async_std::sync::{Condvar, Mutex};
 
-const CAPACITY: usize = 10;
+const CAPACITY: usize = 15;
 
 /// An async FIFO SPSC channel.
 #[derive(Debug)]
@@ -18,8 +17,11 @@ struct Chan<T> {
 
 impl<T> Chan<T> {
     fn new(cap: usize) -> Self {
+        println!("Creating channel with capacity {}", cap);
+        let chan = VecDeque::with_capacity(cap);
+        println!("Created channel with capacity {}", chan.capacity());
         Self {
-            queue: Mutex::new(VecDeque::with_capacity(cap)),
+            queue: Mutex::new(chan),
             pullvar: Condvar::new(),
             pushvar: Condvar::new(),
         }
@@ -37,40 +39,65 @@ pub fn channel<T>() -> (PushChan<T>, PullChan<T>) {
     (PushChan(chan.clone()), PullChan(chan))
 }
 
-impl<T:Clone> PushChan<T> {
+impl<T: Clone + std::fmt::Debug> PushChan<T> {
     pub async fn push(&self, data: T) {
+        println!("Trying to acquire lock for push");
         let mut queue = self.0.queue.lock().await;
-        while queue.len() == queue.capacity() {
-            queue = self.0.pushvar.wait(queue).await;
-        }
+        println!(
+            "Trying to push into queue with length: {} / {}",
+            queue.len(),
+            queue.capacity()
+        );
+        queue = self
+            .0
+            .pushvar
+            .wait_until(queue, |queue| {
+                println!("Checking push condition for {:?}", queue);
+                queue.len() < queue.capacity()
+            })
+            .await;
+        println!(
+            "Pushing into queue with length: {} / {}",
+            queue.len(),
+            queue.capacity()
+        );
         queue.push_back(data);
+        drop(queue);
         self.0.pullvar.notify_one();
+        println!("Pushing done");
     }
 }
 
-impl<T:Clone> PullChan<T> {
+impl<T: Clone + std::fmt::Debug> PullChan<T> {
     pub async fn pull(&self) -> T {
+        println!("Trying to acquire lock for pull");
         let mut queue = self.0.queue.lock().await;
-        while queue.is_empty() {
-            queue = self.0.pullvar.wait(queue).await;
-        }
+        println!(
+            "Trying to pull from queue with length: {} / {}",
+            queue.len(),
+            queue.capacity()
+        );
+        queue = self
+            .0
+            .pushvar
+            .wait_until(queue, |queue| {
+                println!("Checking pull condition for {:?}", queue);
+                !queue.is_empty()
+            })
+            .await;
+        println!(
+            "Pulling from queue with length: {} / {}",
+            queue.len(),
+            queue.capacity()
+        );
         let data = queue.pop_front().unwrap();
+        drop(queue);
         self.0.pushvar.notify_one();
+        println!("Pulling done");
         data
     }
     pub async fn get_buffer(&self) -> Vec<T> {
         let queue = self.0.queue.lock().await;
         queue.iter().cloned().collect()
     }
-}
-
-#[test]
-fn test() {
-    tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-        let (w, r) = channel::<i32>();
-        w.push(1).await;
-        let x = r.pull().await;
-        assert!(x == 1);
-    }
-);
 }
