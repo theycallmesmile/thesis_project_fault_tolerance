@@ -79,7 +79,7 @@ impl<T: Clone + std::fmt::Debug> PullChan<T> {
         );
         queue = self
             .0
-            .pushvar
+            .pullvar
             .wait_until(queue, |queue| {
                 println!("Checking pull condition for {:?}", queue);
                 !queue.is_empty()
