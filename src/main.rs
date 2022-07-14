@@ -19,6 +19,7 @@ mod channel;
 use channel::channel;
 use channel::PullChan;
 use channel::PushChan;
+//use tokio::task::JoinSet;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -62,7 +63,7 @@ async fn consumer_impl(mut state: ConsumerState) {
                         ConsumerState::S0 { input, count }
                     }
                     Event::Marker => {
-                        /* snapshop
+                        /* snapshot
                         1. pull the whole queue
                         2. serialize
                         3. save
@@ -161,14 +162,25 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for PullChan<T> {
     }
 }
 
+
+
 async fn boot_up_func() {
     console_subscriber::init();
+    //let mut set = JoinSet::new();
+
     let stream = producer();
     consumer(stream);
+
+    loop{//System dies without this loop
+
+    }
+
+
 }
 
-//#[tokio::main]
+#[tokio::main]
 //#[async_std::main]
-fn main() {
-    async_std::task::block_on(boot_up_func());
+async fn main() {
+    //async_std::task::block_on(boot_up_func());
+    boot_up_func().await;
 }
