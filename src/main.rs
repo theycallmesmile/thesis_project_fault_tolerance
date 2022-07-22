@@ -1,175 +1,82 @@
 #![allow(warnings, unused)]
 extern crate tokio;
 
-use std::ptr::eq;
-use std::str;
 
-use async_std::stream::Sum;
-use rskafka::time;
-use tokio::fs::File;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+//use std::hash::Hash;
+//use std::os::raw;
+//use std::ptr::eq;
+//use std::str;
+//use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-use serde::{Deserializer, Serializer};
-use serde_json;
+//use async_std::stream::Sum;
+//use rskafka::time;
+//use tokio::fs::File;
+//use tokio::fs::OpenOptions;
+//use tokio::io::AsyncReadExt;
+//use tokio::io::AsyncWriteExt;
 
-mod channel;
-use channel::channel;
-use channel::PullChan;
-use channel::PushChan;
+//use serde::{Deserializer, Serializer};
+//use serde_json;
+
+//use tokio::sync::oneshot;
 //use tokio::task::JoinSet;
+//use std::collections::VecDeque;
 
-use std::collections::VecDeque;
-use std::sync::Arc;
 
-async fn map_operator(input: PullChan<i32>, f: fn(i32) -> i32, output: PushChan<i32>) {
-    loop {
-        let x = input.pull().await;
-        let y = f(x);
-        output.push(y).await;
-    }
-}
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-enum Event<i32> {
-    Data(i32),
-    Marker,
-}
-#[derive(Serialize, Deserialize, Debug)]
-enum ProducerState {
+
+
+
+//new
+pub mod serialize;
+pub mod consumer;
+pub mod rest;
+pub mod manager;
+pub mod producer;
+pub mod channel;
+use serde::{Deserialize, Serialize};
+
+
+
+
+//static mut glob_snapshot_hashmap:HashMap<*const (), TaskToManagerMessage> = HashMap::new();
+
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum PersistentProducerState {
     S0 {
-        output: PushChan<Event<()>>,
+        output: PersistentPushChan<()>,
         count: i32,
     },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-enum ConsumerState {
-    S0 {
-        input: PullChan<Event<()>>,
-        count: i32,
-    },
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PersistentPushChan<T> {
+    uid: u64,
+    buffer: Option<Vec<T>>
 }
 
-async fn consumer_impl(mut state: ConsumerState) {
-    loop {
-        state = match state {
-            ConsumerState::S0 { input, count } => {
-                match input.pull().await {
-                    Event::Data(data) => {
-                        let count = count + 1;
-                        println!("Consumer count is: {}", count);
-                        ConsumerState::S0 { input, count }
-                    }
-                    Event::Marker => {
-                        /* snapshot
-                        1. pull the whole queue
-                        2. serialize
-                        3. save
-                        */
-
-                        let queue = input.get_buffer().await;
-                        println!("The buffer to save to disk is: {:?}", queue);
-
-                        ConsumerState::S0 { input, count }
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn producer_impl(mut state: ProducerState) {
-    loop {
-        println!("Inside producer loop!");
-        state = match state {
-            ProducerState::S0 { output, count } => {
-                let count = count + 1;
-                output.push(Event::Data(())).await;
-                ProducerState::S0 { output, count }
-            }
-        }
-    }
-}
-
-fn producer() -> PullChan<Event<()>> {
+/*fn producer(manager_push: PushChan<Event<()>>) -> PullChan<Event<()>> {
     let (push, pull) = channel::<Event<()>>();
     let state = ProducerState::S0 {
         output: push,
+        manager_output: manager_push,
         count: 0,
     };
-    async_std::task::spawn(producer_impl(state));
+    async_std::task::spawn(state.execute());
     println!("producer operator spawned!");
+    println!("The producer channels: {:?}",pull);
     pull
-}
-
-fn consumer(input: PullChan<Event<()>>) {
-    let state = ConsumerState::S0 { input, count: 0 };
-    async_std::task::spawn(consumer_impl(state));
-    println!("sum_impl operator spawned!");
-}
-
-impl<T: Serialize> Serialize for PushChan<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        todo!();
-        //VecDeque::<T>::serialize(&self.0.as_ref().queue, serializer)
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for PushChan<T> {
-    fn deserialize<D>(deserializer: D) -> Result<PushChan<T>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        todo!(); /*
-                 let chan = Chan {
-                     queue: VecDeque::<T>::deserialize(deserializer),
-                     pullvar: Notify::new(),
-                     pushvar: Notify::new(),
-                 };
-                 Ok(PullChan(Arc::new(chan)))
-                 */
-    }
-}
-
-impl<T: Serialize> Serialize for PullChan<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        todo!();
-        //VecDeque::<T>::serialize(&self.0.as_ref().queue, serializer)
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for PullChan<T> {
-    fn deserialize<D>(deserializer: D) -> Result<PullChan<T>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        todo!(); /*
-                 let chan = Chan {
-                     queue: VecDeque::<T>::deserialize(deserializer),
-                     pullvar: Notify::new(),
-                     pushvar: Notify::new(),
-                 };
-                 Ok(PullChan(Arc::new(chan)))
-                 */
-    }
-}
-
-
+}*/
 
 async fn boot_up_func() {
     console_subscriber::init();
     //let mut set = JoinSet::new();
 
-    let stream = producer();
-    consumer(stream);
+    let manager = manager::manager();
+
+    //let stream = producer(manager);
+    //consumer(stream);
 
     loop{//System dies without this loop
 
