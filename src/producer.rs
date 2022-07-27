@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
-use tokio::time;
 use std::time::Duration;
+use tokio::time;
 
 use tokio::sync::oneshot;
 
@@ -27,6 +27,7 @@ pub enum Event<i32> {
 pub enum ProducerState {
     S0 {
         output: PushChan<Event<()>>,
+        marker_rec: PullChan<Event<()>>,
         count: i32,
     },
 }
@@ -34,27 +35,41 @@ pub enum ProducerState {
 impl ProducerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("producer ON!");
+        let mut interval = time::interval(time::Duration::from_millis(100));
         loop {
             self = match &self {
-                ProducerState::S0 { output, count } => {
+                ProducerState::S0 {
+                    output,
+                    marker_rec,
+                    count,
+                } => {
                     let mut loc_count = count.clone();
                     let mut loc_out = output;
-                    println!("count: {}", count);
-                    if (count.eq(&10)) {
-                        //snapshot func
-                        println!("STORING");
-                        self.store(&ctx).await;
+                    println!("producer count: {}", count);
 
-                        //forward the marker to consumers
-                        loc_out.push(Event::Marker).await;
+                    loop {
+                        tokio::select! {
+                            //send data to consumer
+                            _ = interval.tick() => {
+                                loc_count = count + 1;
+                                loc_out.push(Event::Data(())).await;
+                                break;
+                        },
+                                //snapshot and send marker to consumer
+                                msg = marker_rec.pull() => {
+                                    
+                                //snapshoting
+                                self.store(&ctx).await;
 
-                        loc_count = 0;
-                    } else {
-                        loc_count = count + 1;
-                        loc_out.push(Event::Data(())).await;
+                                //forward the marker to consumers
+                                loc_out.push(Event::Marker).await;
+                                break;
+                            }
+                        }
                     }
                     ProducerState::S0 {
-                        output: loc_out.clone(),
+                        output: output.to_owned(),
+                        marker_rec: marker_rec.to_owned(),
                         count: loc_count,
                     }
                 }
@@ -73,7 +88,7 @@ impl ProducerState {
         let evnt = TaskToManagerMessage::Serialise(Task::Producer(self.clone()), send);
 
         println!("pushed state snapshot to manager");
-        ctx.manager_send.push(evnt).await;
+        ctx.state_manager_send.push(evnt).await;
         println!("waiting for promise");
 
         loop {

@@ -1,6 +1,14 @@
+use tokio::sync::oneshot;
+
+use std::sync::Arc;
+
+use std::time::Duration;
+use tokio::time;
 
 //Manager module
 use crate::manager::Context;
+use crate::manager::Task;
+use crate::manager::TaskToManagerMessage;
 
 //Channel module
 use crate::channel::channel;
@@ -10,7 +18,6 @@ use crate::channel::PushChan;
 //Producer
 use crate::producer::Event;
 
-
 #[derive(Debug, Clone)]
 pub enum ConsumerState {
     S0 {
@@ -19,40 +26,65 @@ pub enum ConsumerState {
     },
 }
 
-
 impl ConsumerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("consumer ON!");
         loop {
-            self = match self {
+            self = match &self {
                 ConsumerState::S0 { input, count } => {
                     match input.pull().await {
                         Event::Data(data) => {
-                            
-                            let count = count + 1;
+                            let loc_count = count + 1;
                             println!("Consumer count is: {}", count);
-                            ConsumerState::S0 { input, count }
+                            ConsumerState::S0 {
+                                input: input.to_owned(),
+                                count: loc_count,
+                            }
                         }
                         Event::Marker => {
-                            /* snapshot
-                            1. pull the whole queue
-                            2. serialize
-                            3. save
-                            */
-    
-                            //let queue = input.get_buffer().await;
-                            //println!("The buffer to save to disk is: {:?}", queue);
+                            //snapshoting
+                            self.store(&ctx).await;
+                            println!("Done with snapshotting");
                             
-                            
-                            //store_func(input.get_buffer().await).await;
-                            self = ConsumerState::S0 { input, count };
-                            //self.store().await;
-                            self
+                            ConsumerState::S0 {
+                                input: input.to_owned(),
+                                count: count.to_owned(),
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    pub async fn store(&self, ctx: &Context) {
+        let mut interval = time::interval(time::Duration::from_millis(100));
+        let slf = Arc::new(self.clone().to_owned());
+        //Rawpointers of self
+        //let raw_pointer: *const () = Arc::into_raw(slf) as *const ();
+        //let new_chan = unsafe {&*raw_pointer}.clone();
+
+        let (send, mut recv) = oneshot::channel();
+        let evnt = TaskToManagerMessage::Serialise(Task::Consumer(self.clone()), send);
+
+        println!("pushed state snapshot to manager");
+        ctx.state_manager_send.push(evnt).await;
+        println!("waiting for promise");
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => println!("Another 100ms"),
+                msg = &mut recv => {
+                    println!("Got message: {}", msg.unwrap());
+                    break;
+                }
+            }
+        }
+        println!("got the promise!");
+        
+        //unsafe{glob_snapshot_hashmap.insert(raw_pointer, evnt3);}
+
+        //ProducerState::store_hashmap(chan_id, raw_pointer);
     }
 
     /*async fn store(&self) {
@@ -73,8 +105,6 @@ impl ConsumerState {
     async fn from_persistent(persistent: PersistentProducerState) -> Self {
         todo!()
     }*/
-
-    
 }
 
 /*pub fn consumer (input: PullChan<Event<()>>){
