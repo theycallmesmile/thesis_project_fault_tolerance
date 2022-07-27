@@ -11,6 +11,6 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.79" 
 tokio = { version = "1.19.2", features = ["full", "tracing","rt"] }
 console-subscriber = "0.1.6"
-async-std = {version = "1.12.0", features=  ["unstable", "attributes"]}
+async-std = {version = "1.12.0", features=  ["unstable", "attributes", "tokio1"]}
 lazy_static = "1.4.0"
 uid = "0.1.7"

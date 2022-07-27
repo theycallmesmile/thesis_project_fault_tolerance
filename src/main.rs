@@ -75,9 +75,6 @@ async fn boot_up_func() {
 
     let manager = manager::manager();
 
-    //let stream = producer(manager);
-    //consumer(stream);
-
     loop{//System dies without this loop
 
     }

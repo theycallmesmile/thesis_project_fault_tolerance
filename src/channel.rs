@@ -19,7 +19,7 @@ pub struct Chan<T> {
 impl<T> Chan<T> {
     fn new(cap: usize) -> Self {
         let chan = VecDeque::with_capacity(cap);
-        println!("Created channel with capacity {}", chan.capacity());
+        //println!("Created channel with capacity {}", chan.capacity());
         Self {
             queue: Mutex::new(chan),
             pullvar: Condvar::new(),
@@ -38,11 +38,23 @@ impl<T> Chan<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PushChan<T>(Arc<Chan<T>>);
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PullChan<T>(Arc<Chan<T>>);
+
+impl<T> Clone for PushChan<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Clone for PullChan<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 pub fn channel<T>() -> (PushChan<T>, PullChan<T>) {
     let chan = Arc::new(Chan::new(CAPACITY));
@@ -63,70 +75,70 @@ pub fn channel_load<T>(ch: Chan<T>) -> (PushChan<T>, PullChan<T>) { //To be used
 
 impl<T:  std::fmt::Debug> PushChan<T> {
     pub async fn push(&self, data: T) {
-        println!("Trying to acquire lock for push");
+        //println!("Trying to acquire lock for push");
         let mut queue = self.0.queue.lock().await;
-        println!(
+        /*println!(
             "Trying to push into queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         queue = self
             .0
             .pushvar
             .wait_until(queue, |queue| {
-                println!("Checking push condition for {:?}", queue);
+                //println!("Checking push condition for {:?}", queue);
                 queue.len() < queue.capacity()
             })
             .await;
-        println!(
+        /*println!(
             "Pushing into queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         queue.push_back(data);
         drop(queue);
         self.0.pullvar.notify_one();
-        println!("Pushing done");
+        //println!("Pushing done");
     }
 }
 
 impl<T:  std::fmt::Debug> PullChan<T> {
     pub async fn pull(&self) -> T {
-        println!("Trying to acquire lock for pull");
+        //println!("Trying to acquire lock for pull");
         let mut queue = self.0.queue.lock().await;
-        println!(
+        /*println!(
             "Trying to pull from queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         queue = self
             .0
             .pullvar
             .wait_until(queue, |queue| {
-                println!("Checking pull condition for {:?}", queue);
+                //println!("Checking pull condition for {:?}", queue);
                 !queue.is_empty()
             })
             .await;
-        println!(
+        /*println!(
             "Pulling from queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         let data = queue.pop_front().unwrap();
         drop(queue);
         self.0.pushvar.notify_one();
-        println!("Pulling done");
+        //println!("Pulling done");
         data
     }
 
     pub async fn pull_manager(&self) -> T {
-        println!("****Trying to acquire lock for pull");
+        //println!("****Trying to acquire lock for pull");
         let mut queue = self.0.queue.lock().await;
-        println!(
+        /*println!(
             "****Trying to pull from queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         queue = self
             .0
             .pullvar
@@ -135,15 +147,15 @@ impl<T:  std::fmt::Debug> PullChan<T> {
                 !queue.is_empty()
             })
             .await;
-        println!(
+        /*println!(
             "****Pulling from queue with length: {} / {}",
             queue.len(),
             queue.capacity()
-        );
+        );*/
         let data = queue.pop_front().unwrap();
         drop(queue);
         self.0.pushvar.notify_one();
-        println!("****Pulling done");
+        //println!("****Pulling done");
         data
     }
 
@@ -166,7 +178,7 @@ impl<T: Clone + std::fmt::Debug> PushChan<T> {
         self.0.clone().id
     }
 
-    pub async fn push_snapshot(&self) {
+    /*pub async fn push_snapshot(&self) {
         println!("Sending snapshot");
         println!("Trying to acquire lock for snapshot-push");
         let mut queue = self.0.queue.lock().await;
@@ -192,7 +204,7 @@ impl<T: Clone + std::fmt::Debug> PushChan<T> {
         drop(queue);
         self.0.pullvar.notify_one();
         println!("Snapshot-pushing done");
-    }
+    }*/
 }
 
 

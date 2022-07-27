@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
+use tokio::time;
+use std::time::Duration;
+
 use tokio::sync::oneshot;
 
 use std::sync::Arc;
@@ -13,12 +16,6 @@ use crate::manager::TaskToManagerMessage;
 //Channel module
 use crate::channel::PullChan;
 use crate::channel::PushChan;
-
-
-
-
-
-
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum Event<i32> {
@@ -34,8 +31,6 @@ pub enum ProducerState {
     },
 }
 
-
-
 impl ProducerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("producer ON!");
@@ -44,50 +39,56 @@ impl ProducerState {
                 ProducerState::S0 { output, count } => {
                     let mut loc_count = count.clone();
                     let mut loc_out = output;
-                    println!("count: {}",count);
-                    if (count.eq(&10)){
+                    println!("count: {}", count);
+                    if (count.eq(&10)) {
                         //snapshot func
+                        println!("STORING");
                         self.store(&ctx).await;
-                        
+
                         //forward the marker to consumers
                         loc_out.push(Event::Marker).await;
 
                         loc_count = 0;
-                    }
-                    else{
+                    } else {
                         loc_count = count + 1;
                         loc_out.push(Event::Data(())).await;
                     }
-                    ProducerState::S0 { output:loc_out.clone(), count:loc_count }
+                    ProducerState::S0 {
+                        output: loc_out.clone(),
+                        count: loc_count,
+                    }
                 }
             }
         }
     }
 
     pub async fn store(&self, ctx: &Context) {
-
+        let mut interval = time::interval(time::Duration::from_millis(100));
         let slf = Arc::new(self.clone().to_owned());
-
         //Rawpointers of self
         //let raw_pointer: *const () = Arc::into_raw(slf) as *const ();
         //let new_chan = unsafe {&*raw_pointer}.clone();
 
-
-        let (send, recv) = oneshot::channel();
+        let (send, mut recv) = oneshot::channel();
         let evnt = TaskToManagerMessage::Serialise(Task::Producer(self.clone()), send);
-        
-        println!("pushing to manager!");
+
+        println!("pushed state snapshot to manager");
         ctx.manager_send.push(evnt).await;
-        println!("pushed to manager!");
-        recv.await;
+        println!("waiting for promise");
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => println!("Another 100ms"),
+                msg = &mut recv => {
+                    println!("Got message: {}", msg.unwrap());
+                    break;
+                }
+            }
+        }
+        println!("got the promise!");
         //unsafe{glob_snapshot_hashmap.insert(raw_pointer, evnt3);}
 
         //ProducerState::store_hashmap(chan_id, raw_pointer);
-        
-
-
-        println!("!!!SELF: {:#?}.",self.clone());
-
     }
 
     pub async fn restore() -> Self {
@@ -98,25 +99,18 @@ impl ProducerState {
         //the value of the hashmap should give the output and the count will be extracted throught the output aswell.
         //let mut snapshot_hashmap: HashMap<u64,*const ()> = HashMap::new();
 
-
-
         //ProducerState::S0 { output: , count: }
         todo!()
     }
-    
-    pub fn store_hashmap(id : u64,p : *const ()){
+
+    pub fn store_hashmap(id: u64, p: *const ()) {
         //let mut snapshot_hashmap: HashMap<u64,*const ()> = HashMap::new();
         //if statement where it checks if the id excists in the hash, then skip
-        
-        
+
         //snapshot_hashmap.insert(id, p);
         println!("snapshot done");
-    
     }
-
 }
-
-
 
 /*fn producer(manager_push: PushChan<Event<()>>) -> PullChan<Event<()>> {
     let (push, pull) = channel::<Event<()>>();
