@@ -10,10 +10,10 @@ const CAPACITY: usize = 15;
 /// An async FIFO SPSC channel.
 #[derive(Debug)]
 pub struct Chan<T> {
-    queue: Mutex<VecDeque<T>>,
+    pub queue: Mutex<VecDeque<T>>,
     pullvar: Condvar,
     pushvar: Condvar,
-    id: u64,
+    id: u64, // Could be removed
 }
 
 impl<T> Chan<T> {
@@ -39,10 +39,10 @@ impl<T> Chan<T> {
 }
 
 #[derive(Debug)]
-pub struct PushChan<T>(Arc<Chan<T>>);
+pub struct PushChan<T>(pub Arc<Chan<T>>);
 
 #[derive(Debug)]
-pub struct PullChan<T>(Arc<Chan<T>>);
+pub struct PullChan<T>(pub Arc<Chan<T>>);
 
 impl<T> Clone for PushChan<T> {
     fn clone(&self) -> Self {
@@ -208,11 +208,3 @@ impl<T: Clone + std::fmt::Debug> PushChan<T> {
 }
 
 
-
-impl<T: Clone + std::fmt::Debug> PullChan<T> {
-    pub async fn get_buffer(&self) -> Vec<T> {
-        let queue = self.0.queue.lock().await;
-        let rtn = queue.iter().cloned().collect();
-        rtn
-    }
-}

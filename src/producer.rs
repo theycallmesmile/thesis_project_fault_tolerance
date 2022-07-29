@@ -27,7 +27,7 @@ pub enum Event<i32> {
 pub enum ProducerState {
     S0 {
         output: PushChan<Event<()>>,
-        marker_rec: PullChan<Event<()>>,
+        marker_rec: PullChan<Event<()>>, //ta bort från producer state, ha det i context istället.
         count: i32,
     },
 }

@@ -8,14 +8,14 @@ use tokio::io::AsyncWriteExt;
 use crate::producer::Event;
 
 //Serialize module
-use crate::serialize::serialize_func;
+use crate::serialize::serialize_func_old;
 
 
 
 async fn store_func(s: Vec<Event<()>>) {
     //Serialize the state
     println!("init");
-    let serialized_state = serialize_func(s).await;
+    let serialized_state = serialize_func_old(s).await;
     //Saving checkpoint to file (appends atm)
     let file = OpenOptions::new()
         .read(true)

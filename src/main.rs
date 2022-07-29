@@ -42,19 +42,6 @@ use serde::{Deserialize, Serialize};
 
 
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-enum PersistentProducerState {
-    S0 {
-        output: PersistentPushChan<()>,
-        count: i32,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct PersistentPushChan<T> {
-    uid: u64,
-    buffer: Option<Vec<T>>
-}
 
 /*fn producer(manager_push: PushChan<Event<()>>) -> PullChan<Event<()>> {
     let (push, pull) = channel::<Event<()>>();
