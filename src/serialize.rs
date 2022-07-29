@@ -138,7 +138,7 @@ impl Task {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
                     output,
-                    marker_rec,
+                    //marker_rec,
                     count,
                 } => {
                     let output = output.to_persistent_chan(serde_state).await;

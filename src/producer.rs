@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use std::sync::Arc;
 
 //Manager module
-use crate::manager::Context;
+use crate::manager::ProducerContext;
 use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
@@ -27,20 +27,19 @@ pub enum Event<i32> {
 pub enum ProducerState {
     S0 {
         output: PushChan<Event<()>>,
-        marker_rec: PullChan<Event<()>>, //ta bort från producer state, ha det i context istället.
         count: i32,
     },
 }
 
 impl ProducerState {
-    pub async fn execute(mut self, ctx: Context) {
+    pub async fn execute(mut self, ctx: ProducerContext) {
         println!("producer ON!");
         let mut interval = time::interval(time::Duration::from_millis(100));
         loop {
             self = match &self {
                 ProducerState::S0 {
                     output,
-                    marker_rec,
+                    //marker_rec,
                     count,
                 } => {
                     let mut loc_count = count.clone();
@@ -56,7 +55,7 @@ impl ProducerState {
                                 break;
                         },
                                 //snapshot and send marker to consumer
-                                msg = marker_rec.pull() => {
+                                msg = ctx.marker_manager_recv.pull() => {
                                     
                                 //snapshoting
                                 self.store(&ctx).await;
@@ -69,7 +68,7 @@ impl ProducerState {
                     }
                     ProducerState::S0 {
                         output: output.to_owned(),
-                        marker_rec: marker_rec.to_owned(),
+                        //marker_rec: marker_rec.to_owned(),
                         count: loc_count,
                     }
                 }
@@ -77,7 +76,7 @@ impl ProducerState {
         }
     }
 
-    pub async fn store(&self, ctx: &Context) {
+    pub async fn store(&self, ctx: &ProducerContext) {
         let mut interval = time::interval(time::Duration::from_millis(100));
         let slf = Arc::new(self.clone().to_owned());
         //Rawpointers of self

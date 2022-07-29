@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time;
 
 //Manager module
-use crate::manager::Context;
+use crate::manager::ConsumerContext;
 use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
@@ -27,7 +27,7 @@ pub enum ConsumerState {
 }
 
 impl ConsumerState {
-    pub async fn execute(mut self, ctx: Context) {
+    pub async fn execute(mut self, ctx: ConsumerContext) {
         println!("consumer ON!");
         loop {
             self = match &self {
@@ -57,7 +57,7 @@ impl ConsumerState {
         }
     }
 
-    pub async fn store(&self, ctx: &Context) {
+    pub async fn store(&self, ctx: &ConsumerContext) {
         let mut interval = time::interval(time::Duration::from_millis(100));
         let slf = Arc::new(self.clone().to_owned());
         //Rawpointers of self

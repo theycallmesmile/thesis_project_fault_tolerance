@@ -34,6 +34,8 @@ pub enum ManagerToTaskMessage {
 struct Manager {
     state_chan_push: PushChan<TaskToManagerMessage>,
     state_chan_pull: PullChan<TaskToManagerMessage>,
+    marker_chan_push: PushChan<Event<()>>,
+    marker_chan_pull: PullChan<Event<()>>,
     marker_chan_vec: Vec<PushChan<Event<()>>>,
     serde_state: SerdeState,
 }
@@ -50,23 +52,31 @@ pub enum Task {
 }
 
 #[derive(Debug)]
-pub struct Context {
-    // Send messages to manager (snapshots, etc)
-    //pub manager_send: PushChan<TaskToManagerMessage>,
-    // Receive messages from manager (marker,)
-    //pub manager_recv: PullChan<ManagerToTaskMessage>,
+pub struct ProducerContext {
+    pub marker_manager_recv: PullChan<Event<()>>,
     pub state_manager_send: PushChan<TaskToManagerMessage>,
-    //pub marker_manager_send: PushChan<TaskToManagerMessage>,
-    //pub marker_manager_recv: PullChan<ManagerToTaskMessage>,
+}
+#[derive(Debug)]
+pub struct ConsumerContext {
+    pub state_manager_send: PushChan<TaskToManagerMessage>,
 }
 
+
 impl Task {
-    fn spawn(self, ctx: Context) {
+    fn spawn_prod(self, ctx: ProducerContext) {
         match self {
-            Task::Consumer(state) => async_std::task::spawn(state.execute(ctx)),
-            Task::Producer(state) => async_std::task::spawn(state.execute(ctx)),
+            Task::Consumer(state) => {},
+            Task::Producer(state) => {async_std::task::spawn(state.execute(ctx));},
         };
     }
+
+    fn spawn_con(self, ctx: ConsumerContext) {
+        match self {
+            Task::Consumer(state) => {async_std::task::spawn(state.execute(ctx));},
+            Task::Producer(state) => {},
+        };
+    }
+
 }
 
 impl Manager {
@@ -158,15 +168,15 @@ enum PersistentConsumerState {
 async fn spawn_operators(self_manager: &mut Manager) {
     //creating channel for communication between a producer and consumer
     let (prod_push, prod_pull) = channel::<Event<()>>();
-    let (marker_send, marker_rec) = channel::<Event<()>>();
 
-    //inserting marker send channels into the manager
-    self_manager.marker_chan_vec = vec![marker_send.clone()];
+
+    //vector with all source producers marker channels
+    self_manager.marker_chan_vec = vec![self_manager.marker_chan_push.clone()];
 
     //creating the states for producer and consumer operators
     let prod_state = ProducerState::S0 {
         output: prod_push, //data to buffer
-        marker_rec: marker_rec,
+        //marker_rec: marker_rec,
         count: 0,
     };
     let cons_state = ConsumerState::S0 {
@@ -174,45 +184,39 @@ async fn spawn_operators(self_manager: &mut Manager) {
         count: 0,
     };
 
-    //creating channels for communication with and from manager, messages will be: markers
-    //Every operator needs its own communication channel for manager
-    let (marker_manager_push1, marker_manager_pull1) =
-        channel_manager::<TaskToManagerMessage, ManagerToTaskMessage>();
-    let (marker_manager_push2, marker_manager_pull2) =
-        channel_manager::<TaskToManagerMessage, ManagerToTaskMessage>();
-
     //Contexts will be used by producers and consumers to send the state to manager and receive and ACK to unblock
     //marker_managers will be used for communication about marker. state_manager will be used for communication about state snapshot¨
-    let ctx1 = Context {
-        //marker_manager_send: marker_manager_push1, //remove
-        //marker_manager_recv: marker_manager_pull1, //remove
+    let prod_ctx = ProducerContext{
+        marker_manager_recv: self_manager.marker_chan_pull.clone(),
         state_manager_send: self_manager.state_chan_push.clone(),
     };
-    let ctx2 = Context {
-        //marker_manager_send: marker_manager_push2, //remove
-        //marker_manager_recv: marker_manager_pull2, //remove
+
+    let cons_ctx = ConsumerContext{
         state_manager_send: self_manager.state_chan_push.clone(),
     };
+
 
     let prod_task = Task::Producer(prod_state); //producer operator
     let cons_task = Task::Consumer(cons_state); //consumer operator
 
-    prod_task.spawn(ctx1); //spawning producer operator
-    cons_task.spawn(ctx2);
+    prod_task.spawn_prod(prod_ctx); //spawning producer operator
+    cons_task.spawn_con(cons_ctx); //spawning consumer operator
 }
 
 pub fn manager() {
-    //let mut snapshot_hashmap: HashMap<u64,*const ()> = HashMap::new();
-
     //push: from the operator to the manager(fe, state), filling the buffer
     //pull: manager can pull from the buffer
-    let (push, pull) = channel::<TaskToManagerMessage>();
+    let (state_push, state_pull) = channel::<TaskToManagerMessage>();
+
+    let(marker_push, marker_pull) = channel::<Event<()>>();
 
     let manager_state = Manager {
-        state_chan_push: push,
-        state_chan_pull: pull,
-        marker_chan_vec: Vec::new(),
-        serde_state: SerdeState::default(),
+        state_chan_push: state_push, // channel for operator state, operator -> buffer
+        state_chan_pull: state_pull, // channel for operator state, buffer -> manager
+        marker_chan_push: marker_push, //source producer marker channel, manager -> buffer
+        marker_chan_pull: marker_pull, //source producer marker channel, buffer -> producer
+        marker_chan_vec: Vec::new(), //all source producer marker channels
+        serde_state: SerdeState::default(), //for serialization and deserialization
     };
 
     async_std::task::spawn(manager_state.run());
