@@ -7,7 +7,15 @@ use async_std::sync::Arc;
 use serde::Deserialize;
 use serde::Serialize;
 
+use tokio::fs::File;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+
+//use serde::ser::{Serializer, SerializeSeq};
+
 //Manager module
+use crate::manager::SerializeTaskVec;
 use crate::manager::Task;
 
 //Channel module
@@ -30,18 +38,18 @@ pub struct SerdeState {
     pub serialised: HashSet<*const ()>, //raw pointer adress av arc chan
     pub deserialised: HashMap<*const (), *const ()>, //adress av  |
 }
-
+#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
 pub enum PersistentTask {
     Consumer(PersistentConsumerState),
     Producer(PersistentProducerState),
 }
 
-pub async fn serialize_func_old(s: Vec<Event<()>>) -> String {
+/*pub async fn serialize_func_old(s: Vec<Event<()>>) -> String {
     let serialized = serde_json::to_string(&s).unwrap();
     return serialized;
-}
+}*/
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentProducerState {
     S0 {
         output: PersistentPushChan<Event<()>>,
@@ -49,7 +57,7 @@ pub enum PersistentProducerState {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentConsumerState {
     S0 {
         input: PersistentPullChan<Event<()>>,
@@ -57,13 +65,13 @@ pub enum PersistentConsumerState {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PersistentPushChan<T> {
     uid: u64,
     buffer: Option<Vec<T>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PersistentPullChan<T> {
     uid: u64,
     buffer: Option<Vec<T>>,
@@ -93,12 +101,16 @@ pub struct PersistentPullChan<T> {
 // data.serialize() => { old_ptr: 12345, data: Some("foo") }
 
 impl<T: Clone + std::fmt::Debug> PullChan<T> {
-    //USE THIS TO SERIALIZE THE STATES!
-    pub async fn to_persistent_chan(&self, serde_state: &mut SerdeState) -> PersistentPullChan<T> {
+    //consumer: used to check if the buffer excists in the hashset, otherwise insert it into the hashset
+    pub async fn to_persistent_chan_cons(
+        &self,
+        serde_state: &mut SerdeState,
+    ) -> PersistentPullChan<T> {
         let queue = self.0.queue.lock().await;
         let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const ();
         let buffer = if serde_state.serialised.contains(&ptr) {
-            None
+            println!("SOMETHING IS WRONG IN THE SERIALIZATION!");
+            None //this should never happen
         } else {
             serde_state.serialised.insert(ptr);
             Some(queue.iter().cloned().collect())
@@ -111,20 +123,22 @@ impl<T: Clone + std::fmt::Debug> PullChan<T> {
 }
 
 impl<T: Clone + std::fmt::Debug> PushChan<T> {
-    //USE THIS TO SERIALIZE THE STATES!
-    pub async fn to_persistent_chan(&self, serde_state: &mut SerdeState) -> PersistentPushChan<T> {
+    //producer: used to check if the buffer excists in the hashset, otherwise insert it into the hashset
+    pub async fn to_persistent_chan_prod(
+        &self,
+        serde_state: &mut SerdeState,
+    ) -> PersistentPushChan<T> {
         let queue = self.0.queue.lock().await;
         let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const ();
         let buffer = if serde_state.serialised.contains(&ptr) {
             None
         } else {
-            serde_state.serialised.insert(ptr);
-            Some(queue.iter().cloned().collect())
+            None
         };
         PersistentPushChan {
             uid: ptr as u64,
-            buffer,
-        }
+            buffer, //The buffer should be only stored by consumer, thus empty buffer given to producer
+        } ////////////^This is done due of consistency of the snapshot and the placement of marker message in the buffer
     }
 }
 
@@ -141,38 +155,61 @@ impl Task {
                     //marker_rec,
                     count,
                 } => {
-                    let output = output.to_persistent_chan(serde_state).await;
+                    let output = output.to_persistent_chan_prod(serde_state).await;
                     PersistentTask::Producer(PersistentProducerState::S0 { output, count })
                 }
             },
             Task::Consumer(state) => match state {
                 ConsumerState::S0 { input, count } => {
-                    let input = input.to_persistent_chan(serde_state).await;
+                    let input = input.to_persistent_chan_cons(serde_state).await;
                     PersistentTask::Consumer(PersistentConsumerState::S0 { input, count })
                 }
             },
         }
     }
+}
 
-    pub async fn serialize(self, mut serde_state: SerdeState) {
-        //create raw pointer
-        //check if raw pointer excists in the hashset
-        //if not, inset it into the hashset
-        //serialize the state and insert it into the hashmap
-        //Save the hashmap persistenly
-
-        /*println!("THE RAW POINTER: {:?}",raw_pointer);
-
-               if !serde_state.serialised.contains(&raw_pointer){
-                   serde_state.serialised.insert(raw_pointer);
-               }
-
-        */
-        println!("Hashset: {:#?}", serde_state.serialised);
+impl PersistentTask {
+    pub async fn push_to_vec(self, serialize_task_vec: &mut SerializeTaskVec) {
+        //push task into a vector which will later on be serialized
+        //the snapshots/states will be stored on memory until the whole checkpointing is done
+        serialize_task_vec.task_vec.push(self);
     }
 }
 
-/*pub struct SerdeContext {
-    serialised: HashSet<u64>,
-    deserialised: HashMap<u64, (PullChan<>, PushChan<>)>,
-}*/
+impl SerializeTaskVec {
+    pub async fn serialize_state(self) {
+        //serializing the vector with all of its snapshot elements
+        let serialized_vec = serde_json::to_string(&self).unwrap();
+        println!("Serialized vec: {:?}", serialized_vec);
+
+        self.save_persistent(serialized_vec).await;
+    }
+    pub async fn save_persistent(self, serialized_vec: String) {
+        //create or open file
+        //save to persistent disc
+        //Saving checkpoint to file (appends atm)
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open("serialized_checkpoints.txt")
+            .await;
+        file.unwrap()
+            .write_all(serialized_vec.as_bytes())
+            .await
+            .unwrap();
+
+        println!("DONE!{}", serialized_vec);
+
+        println!("saving checkpoint to persistent disc");
+    }
+
+    pub async fn deserialize(self, serialized_vec: String) {
+        //1:read from file
+        //2:deserialize
+
+        let deserialized_vec: SerializeTaskVec = serde_json::from_str(&serialized_vec).unwrap();
+        println!("Deserialized vec: {:?}", deserialized_vec.task_vec);
+    }
+}

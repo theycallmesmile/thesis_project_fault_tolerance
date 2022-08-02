@@ -17,7 +17,7 @@ use crate::manager::TaskToManagerMessage;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq,Hash)]
 pub enum Event<i32> {
     Data(i32),
     Marker,

@@ -1,15 +1,20 @@
+
 use tokio::sync::oneshot;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use std::time::Duration;
+use tokio::time;
 
 use async_std::task;
 
+use serde::Serialize;
+use serde::Deserialize;
+
 //Serialize module
-use crate::serialize::serialize_func_old;
-use crate::serialize::SerdeState;
+use crate::serialization::SerdeState;
+use crate::serialization::PersistentTask;
 
 //Consumer module
 use crate::consumer::ConsumerState;
@@ -61,22 +66,29 @@ pub struct ConsumerContext {
     pub state_manager_send: PushChan<TaskToManagerMessage>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SerializeTaskVec {
+    pub task_vec: Vec<PersistentTask>,
+}
 
 impl Task {
     fn spawn_prod(self, ctx: ProducerContext) {
         match self {
-            Task::Consumer(state) => {},
-            Task::Producer(state) => {async_std::task::spawn(state.execute(ctx));},
+            Task::Consumer(state) => {}
+            Task::Producer(state) => {
+                async_std::task::spawn(state.execute(ctx));
+            }
         };
     }
 
     fn spawn_con(self, ctx: ConsumerContext) {
         match self {
-            Task::Consumer(state) => {async_std::task::spawn(state.execute(ctx));},
-            Task::Producer(state) => {},
+            Task::Consumer(state) => {
+                async_std::task::spawn(state.execute(ctx));
+            }
+            Task::Producer(state) => {}
         };
     }
-
 }
 
 impl Manager {
@@ -84,37 +96,79 @@ impl Manager {
         //let mut snapshot_hashmap:HashMap<*const (), TaskToManagerMessage> = HashMap::new();
         //let mut raw_pointer: *const ();
 
+        let mut interval = time::interval(time::Duration::from_millis(100));
+        let mut snapshot_timeout_counter = 0;
+        let mut snapshot_resend_chance = false;
+
         //creating hashmap and hashset
         let mut serde_state = SerdeState {
             serialised: HashSet::new(),
             deserialised: HashMap::new(),
         };
 
-        //init the operators
-        spawn_operators(&mut self).await;
+        let mut serialize_task_vec = SerializeTaskVec {
+            task_vec: Vec::new(),
+        };
+        //let checkpoint = Hash <------- hashset/map for serialization
+
+        //init the operators and returns amount of spawned operators
+        let operator_amount = spawn_operators(&mut self).await;
+        let mut operator_counter = 0;
 
         //Sleeping before sending a marker to the source-producers
         task::sleep(Duration::from_secs(2)).await;
         //loop to send markers to source-producers
-        for marker_chan in self.marker_chan_vec {
-            marker_chan.push(Event::Marker).await;
-        }
+        self.send_markers().await;
 
         loop {
-            match self.state_chan_pull.pull_manager().await {
-                TaskToManagerMessage::Serialise(state, promise) => {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if snapshot_timeout_counter == 30 && snapshot_resend_chance == true {
+                        println!("At least one of the operators are still dead, rollbacking to the latest checkpoint!");
+                        todo!(); //INSERT FUNCTION TO RESTART APPLICATION WITH LATEST CHECKPOINT
+                    } else if snapshot_timeout_counter == 30 && snapshot_resend_chance == false {
+                        println!("At least of the operators does not respond, resending markers!");
+                        snapshot_timeout_counter = 0;
+                        snapshot_resend_chance = true;
+                        serialize_task_vec.task_vec.clear();
+                        operator_counter = 0;
+                        self.send_markers().await;
+                    }
+                    else {
+                        snapshot_timeout_counter += 1;
+                    }
+                },
+                msg = self.state_chan_pull.pull_manager() => {
+                    match msg {
+                        TaskToManagerMessage::Serialise(state, promise) => {
+                            let persistent_task = state.to_persistent_task(&mut serde_state).await;
 
-
-
-                    state.to_persistent_task(&mut serde_state).await;
-
-                    task::sleep(Duration::from_secs(2)).await;
-                    promise.send(1);
-                }
-            };
+                            persistent_task.push_to_vec(&mut serialize_task_vec).await;
+                            task::sleep(Duration::from_secs(2)).await;
+                            promise.send(1);
+                            snapshot_timeout_counter = 0;
+                            snapshot_resend_chance = false;
+                            operator_counter +=1;
+                            if (operator_amount == operator_counter){
+                                serialize_task_vec.serialize_state().await;
+                                break;
+                            }
+                        },
+                    };
+                },
+            }
         }
+        println!("Dobby is a free elf now!");
+    }
+    async fn send_markers(&self) {
+        //sending markers to the source-producers
+        for marker_chan in &self.marker_chan_vec {
+            marker_chan.push(Event::Marker).await;
+        }
+        println!("Done sending the markers to source-producers.");
     }
 }
+
 /*
 #[derive(Debug)]
 enum ProducerState {
@@ -165,10 +219,9 @@ enum PersistentConsumerState {
 //let raw_pointer: *const () = Arc::into_raw(slf) as *const ();
 //let new_chan = unsafe {&*raw_pointer}.clone();
 
-async fn spawn_operators(self_manager: &mut Manager) {
+async fn spawn_operators(self_manager: &mut Manager) -> u8 {
     //creating channel for communication between a producer and consumer
     let (prod_push, prod_pull) = channel::<Event<()>>();
-
 
     //vector with all source producers marker channels
     self_manager.marker_chan_vec = vec![self_manager.marker_chan_push.clone()];
@@ -186,21 +239,21 @@ async fn spawn_operators(self_manager: &mut Manager) {
 
     //Contexts will be used by producers and consumers to send the state to manager and receive and ACK to unblock
     //marker_managers will be used for communication about marker. state_manager will be used for communication about state snapshot¨
-    let prod_ctx = ProducerContext{
+    let prod_ctx = ProducerContext {
         marker_manager_recv: self_manager.marker_chan_pull.clone(),
         state_manager_send: self_manager.state_chan_push.clone(),
     };
 
-    let cons_ctx = ConsumerContext{
+    let cons_ctx = ConsumerContext {
         state_manager_send: self_manager.state_chan_push.clone(),
     };
-
 
     let prod_task = Task::Producer(prod_state); //producer operator
     let cons_task = Task::Consumer(cons_state); //consumer operator
 
     prod_task.spawn_prod(prod_ctx); //spawning producer operator
     cons_task.spawn_con(cons_ctx); //spawning consumer operator
+    2
 }
 
 pub fn manager() {
@@ -208,7 +261,7 @@ pub fn manager() {
     //pull: manager can pull from the buffer
     let (state_push, state_pull) = channel::<TaskToManagerMessage>();
 
-    let(marker_push, marker_pull) = channel::<Event<()>>();
+    let (marker_push, marker_pull) = channel::<Event<()>>();
 
     let manager_state = Manager {
         state_chan_push: state_push, // channel for operator state, operator -> buffer
