@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use std::sync::Arc;
 
 //Manager module
-use crate::manager::ProducerContext;
+use crate::manager::Context;
 use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
@@ -17,7 +17,7 @@ use crate::manager::TaskToManagerMessage;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq,Hash)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Event<i32> {
     Data(i32),
     Marker,
@@ -32,19 +32,16 @@ pub enum ProducerState {
 }
 
 impl ProducerState {
-    pub async fn execute(mut self, ctx: ProducerContext) {
+    pub async fn execute(mut self, ctx: Context) {
         println!("producer ON!");
         let mut interval = time::interval(time::Duration::from_millis(100));
         loop {
             self = match &self {
-                ProducerState::S0 {
-                    output,
-                    //marker_rec,
-                    count,
-                } => {
+                ProducerState::S0 { output, count } => {
                     let mut loc_count = count.clone();
                     let mut loc_out = output;
                     println!("producer count: {}", count);
+                    println!("producer queue: {:?}", &loc_out.0.queue);
 
                     loop {
                         tokio::select! {
@@ -54,14 +51,16 @@ impl ProducerState {
                                 loc_out.push(Event::Data(())).await;
                                 break;
                         },
-                                //snapshot and send marker to consumer
-                                msg = ctx.marker_manager_recv.pull() => {
-                                    
+                            //snapshot and send marker to consumer
+                            msg = ctx.marker_manager_recv.as_ref().unwrap().pull() => {
                                 //snapshoting
+                                println!("start producer snapshotting");
                                 self.store(&ctx).await;
+                                println!("done with producer snapshotting");
 
                                 //forward the marker to consumers
-                                loc_out.push(Event::Marker).await;
+                                println!("SENDING MARKER!");
+                                loc_out.push(Event::Marker).await; 
                                 break;
                             }
                         }
@@ -76,12 +75,9 @@ impl ProducerState {
         }
     }
 
-    pub async fn store(&self, ctx: &ProducerContext) {
+    pub async fn store(&self, ctx: &Context) {
         let mut interval = time::interval(time::Duration::from_millis(100));
         let slf = Arc::new(self.clone().to_owned());
-        //Rawpointers of self
-        //let raw_pointer: *const () = Arc::into_raw(slf) as *const ();
-        //let new_chan = unsafe {&*raw_pointer}.clone();
 
         let (send, mut recv) = oneshot::channel();
         let evnt = TaskToManagerMessage::Serialise(Task::Producer(self.clone()), send);
@@ -92,7 +88,7 @@ impl ProducerState {
 
         loop {
             tokio::select! {
-                _ = interval.tick() => println!("Another 100ms"),
+                _ = interval.tick() => println!("Producer - Another 100ms"),
                 msg = &mut recv => {
                     println!("Got message: {}", msg.unwrap());
                     break;
@@ -100,41 +96,5 @@ impl ProducerState {
             }
         }
         println!("got the promise!");
-        //unsafe{glob_snapshot_hashmap.insert(raw_pointer, evnt3);}
-
-        //ProducerState::store_hashmap(chan_id, raw_pointer);
-    }
-
-    pub async fn restore() -> Self {
-        //take from hashmap
-        //..how to know which key..?
-        //or maybe it doesnt matter which key, the id should be updated because of the output
-
-        //the value of the hashmap should give the output and the count will be extracted throught the output aswell.
-        //let mut snapshot_hashmap: HashMap<u64,*const ()> = HashMap::new();
-
-        //ProducerState::S0 { output: , count: }
-        todo!()
-    }
-
-    pub fn store_hashmap(id: u64, p: *const ()) {
-        //let mut snapshot_hashmap: HashMap<u64,*const ()> = HashMap::new();
-        //if statement where it checks if the id excists in the hash, then skip
-
-        //snapshot_hashmap.insert(id, p);
-        println!("snapshot done");
     }
 }
-
-/*fn producer(manager_push: PushChan<Event<()>>) -> PullChan<Event<()>> {
-    let (push, pull) = channel::<Event<()>>();
-    let state = ProducerState::S0 {
-        output: push,
-        manager_output: manager_push,
-        count: 0,
-    };
-    async_std::task::spawn(state.execute());
-    println!("producer operator spawned!");
-    println!("The producer channels: {:?}",pull);
-    pull
-}*/

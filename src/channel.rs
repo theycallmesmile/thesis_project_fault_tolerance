@@ -5,7 +5,14 @@ use std::sync::Arc;
 
 use async_std::sync::{Condvar, Mutex};
 
-const CAPACITY: usize = 15;
+use serde::Deserialize;
+use serde::Serialize;
+
+//producer module
+use crate::producer::Event;
+
+
+pub const CAPACITY: usize = 15;
 
 /// An async FIFO SPSC channel.
 #[derive(Debug)]
@@ -13,7 +20,6 @@ pub struct Chan<T> {
     pub queue: Mutex<VecDeque<T>>,
     pullvar: Condvar,
     pushvar: Condvar,
-    id: u64, // Could be removed
 }
 
 impl<T> Chan<T> {
@@ -24,7 +30,6 @@ impl<T> Chan<T> {
             queue: Mutex::new(chan),
             pullvar: Condvar::new(),
             pushvar: Condvar::new(),
-            id: uid::IdU64::<()>::new().get()
         }
     }
     fn load(cap: usize, ch: Chan<T>) -> Self { //To be used when loading the checkpoints
@@ -33,8 +38,10 @@ impl<T> Chan<T> {
             queue: ch.queue,
             pullvar: ch.pullvar,
             pushvar: ch.pushvar,
-            id: ch.id
         }
+    }
+    fn from_vec(buf: Vec<T>) -> Self {
+        Self { queue: Mutex::new(buf.into_iter().collect()), pullvar: Condvar::new(), pushvar: Condvar::new() }
     }
 }
 
@@ -56,6 +63,34 @@ impl<T> Clone for PullChan<T> {
     }
 }
 
+impl<T> PullChan<T> {
+    pub fn from_vec(buf: Vec<T>) -> Self {
+        Self(Arc::new(Chan::from_vec(buf)))
+    }
+    pub fn get_uid(&self) -> u64 {
+        Arc::into_raw(self.0.clone()) as *const () as u64
+    }
+    pub fn from_uid(uid: u64) -> Self {
+        unsafe {
+            Self(Arc::from_raw(uid as *const _))
+        }
+    }
+}
+
+impl<T> PushChan<T> {
+    pub fn from_vec(buf: Vec<T>) -> Self {
+        Self(Arc::new(Chan::from_vec(buf)))
+    }
+    pub fn get_uid(&self) -> u64 {
+        Arc::into_raw(self.0.clone()) as *const () as u64
+    }
+    pub fn from_uid(uid: u64) -> Self {
+        unsafe {
+            Self(Arc::from_raw(uid as *const _))
+        }
+    }
+}
+
 pub fn channel<T>() -> (PushChan<T>, PullChan<T>) {
     let chan = Arc::new(Chan::new(CAPACITY));
     (PushChan(chan.clone()), PullChan(chan))
@@ -68,9 +103,12 @@ pub fn channel_manager<T,G>() -> (PushChan<T>, PullChan<G>) {
     (PushChan(chan.clone()), PullChan(chan2.clone()))
 }
 
-pub fn channel_load<T>(ch: Chan<T>) -> (PushChan<T>, PullChan<T>) { //To be used when loading the checkpoints to connect the operator channels.
-    let chan = Arc::new(Chan::load(CAPACITY, ch));
-    (PushChan(chan.clone()), PullChan(chan))
+pub fn channel_load(vec_d: VecDeque<Event<()>>) -> (PushChan<Event<()>>, PullChan<Event<()>>) { //To be used when loading the checkpoints to connect the operator channels.
+    let mut chan = Chan::new(CAPACITY);
+    let mtx_queue = Mutex::new(vec_d);
+    chan.queue = mtx_queue;
+    let arc_chan = Arc::new(chan);
+    (PushChan(arc_chan.clone()), PullChan(arc_chan))
 }
 
 impl<T:  std::fmt::Debug> PushChan<T> {
@@ -172,10 +210,6 @@ impl<T: Clone + std::fmt::Debug> PushChan<T> {
 
     pub async fn get_chan(&self) -> Arc<Chan<T>>{
         self.0.clone()
-    }
-
-    pub async fn get_id(&self) -> u64 {
-        self.0.clone().id
     }
 
     /*pub async fn push_snapshot(&self) {

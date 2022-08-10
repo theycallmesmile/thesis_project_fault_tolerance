@@ -1,59 +1,15 @@
 #![allow(warnings, unused)]
 extern crate tokio;
 
-
-//use std::hash::Hash;
-//use std::os::raw;
-//use std::ptr::eq;
-//use std::str;
-//use std::sync::Arc;
-
-//use async_std::stream::Sum;
-//use rskafka::time;
-//use tokio::fs::File;
-//use tokio::fs::OpenOptions;
-//use tokio::io::AsyncReadExt;
-//use tokio::io::AsyncWriteExt;
-
-//use serde::{Deserializer, Serializer};
-//use serde_json;
-
-//use tokio::sync::oneshot;
-//use tokio::task::JoinSet;
-//use std::collections::VecDeque;
-
-
-
-
-
 //new
 pub mod serialization;
 pub mod consumer;
 pub mod manager;
 pub mod producer;
 pub mod channel;
+pub mod shared;
 use serde::{Deserialize, Serialize};
 
-
-
-
-//static mut glob_snapshot_hashmap:HashMap<*const (), TaskToManagerMessage> = HashMap::new();
-
-
-
-
-/*fn producer(manager_push: PushChan<Event<()>>) -> PullChan<Event<()>> {
-    let (push, pull) = channel::<Event<()>>();
-    let state = ProducerState::S0 {
-        output: push,
-        manager_output: manager_push,
-        count: 0,
-    };
-    async_std::task::spawn(state.execute());
-    println!("producer operator spawned!");
-    println!("The producer channels: {:?}",pull);
-    pull
-}*/
 
 async fn boot_up_func() {
     console_subscriber::init();
