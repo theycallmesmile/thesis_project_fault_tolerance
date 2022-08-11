@@ -29,4 +29,5 @@ async fn boot_up_func() {
 async fn main() {
     //async_std::task::block_on(boot_up_func());
     boot_up_func().await;
+    //manager::temp_spawn_operators().await;
 }

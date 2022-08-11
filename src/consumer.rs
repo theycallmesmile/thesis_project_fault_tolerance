@@ -26,7 +26,7 @@ use crate::producer::Event;
 #[derive(Debug, Clone)]
 pub enum ConsumerState {
     S0 {
-        input: PullChan<Event<()>>,
+        input_vec: Vec<PullChan<Event<()>>>,
         count: i32,
     },
 }
@@ -34,36 +34,90 @@ pub enum ConsumerState {
 impl ConsumerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("consumer ON!");
+        let mut interval = time::interval(time::Duration::from_millis(100));
         task::sleep(Duration::from_secs(2)).await;
+        let mut return_state = match &self{
+            ConsumerState::S0 { input_vec, count } => {
+                ConsumerState::S0 {
+                    input_vec: input_vec.to_owned(),
+                    count: count.to_owned(),
+                }
+            },
+        };
+
         loop {
             self = match &self {
-                ConsumerState::S0 { input, count } => {
-                    match input.pull().await {
-                        Event::Data(data) => {
-                            let loc_count = count + 1;
-                            println!("Consumer count is: {}", count);
-                            println!("The consumer buffer: {:?}", &input.0.queue);
-                            ConsumerState::S0 {
-                                input: input.to_owned(),
-                                count: loc_count,
-                            }
-                        }
-                        Event::Marker => {
-                            //snapshoting
-                            println!("Start consumer snapshotting");
-                            self.store(&ctx).await;
-                            println!("Done with consumer snapshotting");
-                            
-                            ConsumerState::S0 {
-                                input: input.to_owned(),
-                                count: count.to_owned(),
-                            }
+                ConsumerState::S0 { input_vec, count } => {
+                    //for input in input_vec {
+                    for n in 0..input_vec.len(){
+                        tokio::select! {
+                            _ = interval.tick() => {
+                                println!("Buffer empty for: {:?}", &input_vec[n]);
+                            },
+                            event = input_vec[n].pull() => {
+                                match event {
+                                    Event::Data(data) => {
+                                        let loc_count = count + 1;
+                                        println!("Consumer count is: {}", count);
+                                        println!("The consumer buffer: {:?}", &input_vec[n].0.queue);
+
+                                        return_state = ConsumerState::S0 {
+                                            input_vec: input_vec.to_owned(),
+                                            count: loc_count,
+                                        };
+                                        break;
+                                },
+                                    Event::Marker => {
+                                        //snapshoting
+                                        println!("Start consumer snapshotting");
+                                        self.store(&ctx).await;
+                                        println!("Done with consumer snapshotting");
+                    
+                                        return_state = ConsumerState::S0 {
+                                            input_vec: input_vec.to_owned(),
+                                            count: count.to_owned(),
+                                        };
+                                        break;
+                                    }
+                                }
+                            },
                         }
                     }
+                    return_state.clone()
+
                 }
             }
         }
     }
+
+    /*    pub async fn temp(){
+        for input in input {
+            match input.pull().await {
+                Event::Data(data) => {
+                    let loc_count = count + 1;
+                    println!("Consumer count is: {}", count);
+                    println!("The consumer buffer: {:?}", &input.0.queue);
+                    ConsumerState::S0 {
+                        input: input.to_owned(),
+                        count: loc_count,
+                    }
+                    break;
+                },
+                Event::Marker => {
+                    //snapshoting
+                    println!("Start consumer snapshotting");
+                    self.store(&ctx).await;
+                    println!("Done with consumer snapshotting");
+
+                    ConsumerState::S0 {
+                        input: input.to_owned(),
+                        count: count.to_owned(),
+                    }
+                    break;
+                }
+            }
+        }
+    }*/
 
     pub async fn store(&self, ctx: &Context) {
         let mut interval = time::interval(time::Duration::from_millis(100));

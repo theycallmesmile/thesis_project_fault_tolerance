@@ -88,10 +88,10 @@ impl Task {
                 }
             },
             Task::Consumer(state) => match state {
-                ConsumerState::S0 { input, count } => {
+                ConsumerState::S0 { input_vec, count } => todo!()/*ConsumerState::S0 { input, count } => {
                     let input = input.to_persistent(serde_state).await;
                     PersistentTask::Consumer(PersistentConsumerState::S0 { input, count })
-                }
+                }*/
             },
         }
     }
@@ -178,7 +178,7 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
                 PersistentConsumerState::S0 { input, count } => {
                     //look up in the hashtable to find value of ptr and check if the value is empty vec
                     let input = PullChan::from_persistent(input, ptr_vec_hashmap);
-                    tasks.push(Task::Consumer(ConsumerState::S0 { input, count }));
+                    todo!()//tasks.push(Task::Consumer(ConsumerState::S0 { input, count }));
                 }
             },
             PersistentTask::Producer(state) => match state {

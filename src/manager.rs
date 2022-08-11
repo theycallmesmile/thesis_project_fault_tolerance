@@ -15,15 +15,14 @@ use serde::Serialize;
 
 use crate::channel::CAPACITY;
 //Serialize module
+use crate::serialization::load_deserialize;
+use crate::serialization::load_persistent;
+use crate::serialization::save_persistent;
+use crate::serialization::serialize_state;
 use crate::serialization::PersistentConsumerState;
 use crate::serialization::PersistentProducerState;
 use crate::serialization::PersistentTask;
 use crate::serialization::SerdeState;
-use crate::serialization::load_persistent;
-use crate::serialization::load_deserialize;
-use crate::serialization::save_persistent;
-use crate::serialization::serialize_state;
-
 
 //Consumer module
 use crate::consumer::ConsumerState;
@@ -49,7 +48,7 @@ pub enum ManagerToTaskMessage {
 }
 
 //Manager state with channels used for commincation between the operators and manager operator
-struct Manager {
+pub struct Manager {
     state_chan_push: PushChan<TaskToManagerMessage>,
     state_chan_pull: PullChan<TaskToManagerMessage>,
     marker_chan_push: PushChan<Event<()>>,
@@ -80,12 +79,15 @@ pub struct SerializeTaskVec {
     pub task_vec: Vec<PersistentTask>,
 }
 
+#[derive(Debug, Eq, Hash, PartialEq, Clone)]
+pub enum Operators {
+    SourceProducer(i32),
+    Consumer(i32),
+    ConsumerProducer(i32),
+}
 
 impl Task {
-    fn spawn(
-        self,
-        ctx: Context,
-    ) -> async_std::task::JoinHandle<()> {
+    fn spawn(self, ctx: Context) -> async_std::task::JoinHandle<()> {
         match self {
             Task::Consumer(state) => async_std::task::spawn(state.execute(ctx)),
             Task::Producer(state) => async_std::task::spawn(state.execute(ctx)),
@@ -107,10 +109,9 @@ impl Manager {
         };
 
         let mut serialize_task_vec: Vec<Task> = Vec::new(); //given to the serialize function
- 
 
         //init the operators and returns amount of spawned operato&mut rs
-        let mut operator_spawn_vec = spawn_operators(&mut self).await;
+        let mut operator_spawn_vec = temp_spawn_operators(&mut self).await;
         let mut operator_amount = operator_spawn_vec.len();
         let mut operator_counter = 0;
 
@@ -121,7 +122,7 @@ impl Manager {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if snapshot_timeout_counter == 30 && snapshot_resend_chance == true {
+                    if snapshot_timeout_counter == 3000 && snapshot_resend_chance == true {
                         println!("One or more operator does not respond, rollbacking to the latest checkpoint!");
                         while let Some(operator) = operator_spawn_vec.pop() {
                             operator.cancel().await;
@@ -134,16 +135,14 @@ impl Manager {
 
                         operator_spawn_vec = respawn_operator(&mut self, serialize_task_vec).await; //respawning task operators
 
-
                         //resetting the values
                         operator_amount = operator_spawn_vec.len();
                         operator_counter = 0;
 
-
                         //self.send_markers().await; //sending new markers
                         break;
 
-                    } else if snapshot_timeout_counter == 30 && snapshot_resend_chance == false {
+                    } else if snapshot_timeout_counter == 3000 && snapshot_resend_chance == false {
                         println!("At least of the operators does not respond, resending markers!");
                         snapshot_timeout_counter = 0;
                         snapshot_resend_chance = true;
@@ -159,7 +158,7 @@ impl Manager {
                     match msg {
                         TaskToManagerMessage::Serialise(state, promise) => {
                             let persistent_task = state.to_persistent_task(&mut serde_state).await;
-                            
+
                             serde_state.persistent_task_vec.push(persistent_task);
                             //persistent_task.push_to_vec(&mut serialize_task_vec).await;// <-- remove and change to persistent_task_vec?
                             //task::sleep(Duration::from_secs(2)).await;
@@ -189,9 +188,135 @@ impl Manager {
     }
 }
 
-//Rawpointers of self
-//let raw_pointer: *const () = Arc::into_raw(slf) as *const ();
-//let new_chan = unsafe {&*raw_pointer}.clone();
+pub enum OperatorChannels {
+    Push(PushChan<Event<()>>),
+    Pull(PullChan<Event<()>>),
+}
+
+pub async fn temp_spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::JoinHandle<()>> {
+    let mut operator_connections: HashMap<Operators, Vec<Operators>> = HashMap::new(); //dataflow graph
+    let mut operator_channel: HashMap<Operators, (PushChan<Event<()>>, PullChan<Event<()>>)> =
+        HashMap::new(); //store operator in/out channels
+    let mut operator_state_chan: HashMap<Operators, Vec<OperatorChannels>> = HashMap::new();
+
+    let mut task_op_spawn_vec = Vec::new();
+    //let mut spawned_operators: HashSet<Operators> = HashSet::new(); //prevent duplicates, use operator_channel instead????!
+
+    //Dataflow graph
+    operator_connections.insert(Operators::SourceProducer(12), vec![Operators::Consumer(35)]);
+
+    //creating channels for source producers and consumer_producers
+    for connection in &operator_connections {
+        //create as a new func?
+        let (push, pull) = channel::<Event<()>>();
+        operator_channel.insert(connection.0.to_owned(), (push, pull));
+    }
+
+    //grouping up the channels (push or pull) for each operator
+    for connection in &operator_connections {
+        //kan vara egen funktion
+        //without for-loop since the key is not a vec
+        let key_chan = operator_channel.get(connection.0).unwrap().0.clone();
+        operator_state_chan.insert(
+            connection.0.to_owned(),
+            vec![OperatorChannels::Push(key_chan)],
+        );
+
+        //going through the vector in the hashvalue
+        for connection_val in connection.1 {
+            match connection_val {
+                Operators::SourceProducer(_) => {}
+                Operators::Consumer(_) => {
+                    if operator_state_chan.contains_key(&connection_val) {
+                        //add a new chan to the vector and update the vector
+                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        operator_state_chan
+                            .entry(connection_val.to_owned())
+                            .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
+                    } else {
+                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        operator_state_chan.insert(
+                            connection_val.to_owned(),
+                            vec![OperatorChannels::Pull(val_chan)],
+                        );
+                    }
+                }
+                Operators::ConsumerProducer(_) => {
+                    if operator_state_chan.contains_key(&connection_val) {
+                        //add a new chan to the vector and update the vector
+                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        operator_state_chan
+                            .entry(connection_val.to_owned())
+                            .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
+                    } else {
+                        let val_chan = operator_channel.get(connection.0).unwrap().0.clone();
+                        operator_state_chan.insert(
+                            connection_val.to_owned(),
+                            vec![OperatorChannels::Push(val_chan)],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for operator in &operator_state_chan {
+        //kan vara egen funktion
+        match operator.0 {
+            Operators::SourceProducer(_) => {
+                let chan = operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap()).await;
+                let prod_state = ProducerState::S0 {
+                    output: chan[0].clone(), //data to buffer <------- will need to be changed to accept vectors
+                    count: 0,
+                };
+                let prod_ctx = Context {
+                    marker_manager_recv: Some(self_manager.marker_chan_pull.clone()),
+                    state_manager_send: self_manager.state_chan_push.clone(),
+                };
+                let prod_task = Task::Producer(prod_state);
+                task_op_spawn_vec.push(prod_task.spawn(prod_ctx));
+
+            }
+            Operators::Consumer(_) => {
+                let cons_state = ConsumerState::S0 {
+                    input_vec: operator_channel_to_pull_vec(operator_state_chan.get(operator.0).unwrap()).await, //taking data from buffer, maybe create a func, for turning operatorChannel vec to chan vec?
+                    count: 0,
+                };
+                let cons_ctx = Context {
+                    marker_manager_recv: None,
+                    state_manager_send: self_manager.state_chan_push.clone(),
+                };
+                let cons_task = Task::Consumer(cons_state);
+                task_op_spawn_vec.push(cons_task.spawn(cons_ctx));
+            }
+
+            Operators::ConsumerProducer(_) => {} //TODO
+        }
+    }
+    task_op_spawn_vec
+}
+
+async fn operator_channel_to_pull_vec(operator_chan: &Vec<OperatorChannels>) -> Vec<PullChan<Event<()>>>{
+    let mut pull_vec = Vec::new();
+    for chan in operator_chan {
+        match chan {
+            OperatorChannels::Push(chan) => {},
+            OperatorChannels::Pull(chan) => pull_vec.push(chan.clone()),
+        }
+    }
+    pull_vec
+}
+
+async fn operator_channel_to_push_vec(operator_chan: &Vec<OperatorChannels>) -> Vec<PushChan<Event<()>>>{
+    let mut push_vec = Vec::new();
+    for chan in operator_chan {
+        match chan {
+            OperatorChannels::Push(chan) => push_vec.push(chan.clone()),
+            OperatorChannels::Pull(chan) => {},
+        }
+    }
+    push_vec
+}
 
 async fn spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::JoinHandle<()>> {
     //creating channel for communication between a producer and consumer
@@ -207,14 +332,14 @@ async fn spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::Joi
         count: 0,
     };
     let cons_state = ConsumerState::S0 {
-        input: cons_pull, //taking data from buffer
+        input_vec: vec![cons_pull], //taking data from buffer
         count: 0,
     };
 
     //Contexts will be used by producers and consumers to send the state to manager and receive and ACK to unblock
     //marker_managers will be used for communication about marker. state_manager will be used for communication about state snapshot¨
-    
-    let o2 = self_manager.state_chan_push.clone();
+
+    //let o2 = self_manager.state_chan_push.clone();
     let prod_ctx = Context {
         marker_manager_recv: Some(self_manager.marker_chan_pull.clone()),
         state_manager_send: self_manager.state_chan_push.clone(),
@@ -234,8 +359,10 @@ async fn spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::Joi
     task_op_spawn_vec
 }
 
-
-async fn respawn_operator(self_manager: &mut Manager, task_vec: Vec<Task>) -> Vec<async_std::task::JoinHandle<()>> {
+async fn respawn_operator(
+    self_manager: &mut Manager,
+    task_vec: Vec<Task>,
+) -> Vec<async_std::task::JoinHandle<()>> {
     let mut handle_vec: Vec<async_std::task::JoinHandle<()>> = Vec::new();
     for task in task_vec {
         let handle = match task {
@@ -245,20 +372,19 @@ async fn respawn_operator(self_manager: &mut Manager, task_vec: Vec<Task>) -> Ve
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
                 task.spawn(cons_ctx)
-            },
+            }
             Task::Producer(_) => {
                 let prod_ctx = Context {
                     marker_manager_recv: Some(self_manager.marker_chan_pull.clone()),
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
                 task.spawn(prod_ctx)
-            },
+            }
         };
         handle_vec.push(handle);
     }
     handle_vec
 }
-
 
 pub fn manager() {
     //push: from the operator to the manager(fe, state), filling the buffer
