@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::channel::CAPACITY;
+use crate::channel::channel_vec;
 //Serialize module
 use crate::serialization::load_deserialize;
 use crate::serialization::load_persistent;
@@ -195,46 +196,50 @@ pub enum OperatorChannels {
 
 pub async fn temp_spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::JoinHandle<()>> {
     let mut operator_connections: HashMap<Operators, Vec<Operators>> = HashMap::new(); //dataflow graph
-    let mut operator_channel: HashMap<Operators, (PushChan<Event<()>>, PullChan<Event<()>>)> =
+    let mut operator_channel: HashMap<Operators, Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>> =
         HashMap::new(); //store operator in/out channels
     let mut operator_state_chan: HashMap<Operators, Vec<OperatorChannels>> = HashMap::new();
 
     let mut task_op_spawn_vec = Vec::new();
-    //let mut spawned_operators: HashSet<Operators> = HashSet::new(); //prevent duplicates, use operator_channel instead????!
 
     //Dataflow graph
-    operator_connections.insert(Operators::SourceProducer(12), vec![Operators::Consumer(35)]);
+    operator_connections.insert(Operators::SourceProducer(12), vec![Operators::Consumer(35),Operators::Consumer(5)]);
 
-    //creating channels for source producers and consumer_producers
+    //creating channels for source producers and consumer_producers. Every prod/con_prod will have a separate channel with connected operator
+    //create as a new func?
     for connection in &operator_connections {
-        //create as a new func?
-        let (push, pull) = channel::<Event<()>>();
-        operator_channel.insert(connection.0.to_owned(), (push, pull));
+        let chan_vec = channel_vec::<Event<()>>(connection.1.clone().len());
+        operator_channel.insert(connection.0.to_owned(), chan_vec);
     }
 
     //grouping up the channels (push or pull) for each operator
     for connection in &operator_connections {
         //kan vara egen funktion
-        //without for-loop since the key is not a vec
-        let key_chan = operator_channel.get(connection.0).unwrap().0.clone();
+        //Producer operator state_chan is given X amount of push for each connected channel.
+        let key_chan = operator_channel.get(connection.0).unwrap().clone();
+        let mut operator_prod_push_vec: Vec<OperatorChannels> = Vec::new();
+        for chan in key_chan {
+            operator_prod_push_vec.push(OperatorChannels::Push(chan.0));
+        }
         operator_state_chan.insert(
             connection.0.to_owned(),
-            vec![OperatorChannels::Push(key_chan)],
+            operator_prod_push_vec,
         );
 
-        //going through the vector in the hashvalue
+        //going through the vector in the hashvalue <-- VALUE
+        let mut count = 0;
         for connection_val in connection.1 {
             match connection_val {
-                Operators::SourceProducer(_) => {}
+                Operators::SourceProducer(_) => {/*should never enter here */}
                 Operators::Consumer(_) => {
                     if operator_state_chan.contains_key(&connection_val) {
                         //add a new chan to the vector and update the vector
-                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
                         operator_state_chan
                             .entry(connection_val.to_owned())
                             .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
                     } else {
-                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
                         operator_state_chan.insert(
                             connection_val.to_owned(),
                             vec![OperatorChannels::Pull(val_chan)],
@@ -244,12 +249,12 @@ pub async fn temp_spawn_operators(self_manager: &mut Manager) -> Vec<async_std::
                 Operators::ConsumerProducer(_) => {
                     if operator_state_chan.contains_key(&connection_val) {
                         //add a new chan to the vector and update the vector
-                        let val_chan = operator_channel.get(connection.0).unwrap().1.clone();
+                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
                         operator_state_chan
                             .entry(connection_val.to_owned())
                             .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
                     } else {
-                        let val_chan = operator_channel.get(connection.0).unwrap().0.clone();
+                        let val_chan = operator_channel.get(connection.0).unwrap()[count].0.clone();
                         operator_state_chan.insert(
                             connection_val.to_owned(),
                             vec![OperatorChannels::Push(val_chan)],
@@ -257,6 +262,7 @@ pub async fn temp_spawn_operators(self_manager: &mut Manager) -> Vec<async_std::
                     }
                 }
             }
+            count +=1;
         }
     }
 

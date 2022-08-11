@@ -53,6 +53,7 @@ impl ConsumerState {
                         tokio::select! {
                             _ = interval.tick() => {
                                 println!("Buffer empty for: {:?}", &input_vec[n]);
+                                println!("Consumer count is: {}", count);
                             },
                             event = input_vec[n].pull() => {
                                 match event {
