@@ -271,8 +271,9 @@ pub async fn temp_spawn_operators(self_manager: &mut Manager) -> Vec<async_std::
         match operator.0 {
             Operators::SourceProducer(_) => {
                 let chan = operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap()).await;
+                println!("AMOUNT OF CHANNELS: {},{:?}",chan.clone().len(),chan.clone());
                 let prod_state = ProducerState::S0 {
-                    output: chan[0].clone(), //data to buffer <------- will need to be changed to accept vectors
+                    output_vec: chan.clone(),
                     count: 0,
                 };
                 let prod_ctx = Context {
@@ -333,7 +334,7 @@ async fn spawn_operators(self_manager: &mut Manager) -> Vec<async_std::task::Joi
 
     //creating the states for producer and consumer operators
     let prod_state = ProducerState::S0 {
-        output: prod_push, //data to buffer
+        output_vec: todo!(),//prod_push, //data to buffer
         //marker_rec: marker_rec,
         count: 0,
     };

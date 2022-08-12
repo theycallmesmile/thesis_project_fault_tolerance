@@ -79,11 +79,11 @@ impl Task {
         match self {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
-                    output,
+                    output_vec,
                     //marker_rec,
                     count,
                 } => {
-                    let output = output.to_persistent(serde_state).await;
+                    let output = todo!();//output_vec.to_persistent(serde_state).await; //FIXXXXX
                     PersistentTask::Producer(PersistentProducerState::S0 { output, count })
                 }
             },
@@ -184,7 +184,7 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
             PersistentTask::Producer(state) => match state {
                 PersistentProducerState::S0 { output, count } => {
                     let output = PushChan::from_persistent(output, ptr_vec_hashmap);
-                    tasks.push(Task::Producer(ProducerState::S0 { output, count }));
+                    tasks.push(Task::Producer(ProducerState::S0 { output_vec:vec![output], count })); //FIX!!! output is not correct, before: { output_vec:output, count }));
                 }
             },
         }

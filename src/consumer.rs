@@ -34,7 +34,7 @@ pub enum ConsumerState {
 impl ConsumerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("consumer ON!");
-        let mut interval = time::interval(time::Duration::from_millis(100));
+        let mut interval = time::interval(time::Duration::from_millis(200));
         task::sleep(Duration::from_secs(2)).await;
         let mut return_state = match &self{
             ConsumerState::S0 { input_vec, count } => {
@@ -52,8 +52,8 @@ impl ConsumerState {
                     for n in 0..input_vec.len(){
                         tokio::select! {
                             _ = interval.tick() => {
-                                println!("Buffer empty for: {:?}", &input_vec[n]);
-                                println!("Consumer count is: {}", count);
+                                println!("Consumer count is: {},Buffer empty for: {:?}", count, &input_vec[n]);
+                                
                             },
                             event = input_vec[n].pull() => {
                                 match event {
@@ -66,7 +66,6 @@ impl ConsumerState {
                                             input_vec: input_vec.to_owned(),
                                             count: loc_count,
                                         };
-                                        break;
                                 },
                                     Event::Marker => {
                                         //snapshoting
@@ -78,7 +77,7 @@ impl ConsumerState {
                                             input_vec: input_vec.to_owned(),
                                             count: count.to_owned(),
                                         };
-                                        break;
+                                        break; //TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
                                     }
                                 }
                             },
