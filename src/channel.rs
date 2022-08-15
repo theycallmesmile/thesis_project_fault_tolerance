@@ -100,6 +100,7 @@ pub fn channel_vec<T>(amount: usize) -> Vec<(PushChan<T>, PullChan<T>)> {
     let mut chan_vec: Vec<(PushChan<T>, PullChan<T>)> = Vec::new();
     for n in 0..amount {
         let chan = Arc::new(Chan::new(CAPACITY));
+        let a = PushChan(chan.clone());
         chan_vec.push((PushChan(chan.clone()), PullChan(chan)));
     }
     chan_vec

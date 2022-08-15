@@ -1,14 +1,12 @@
-use tokio::sync::oneshot;
-
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use serde::{Deserializer, Serializer};
 
 use std::time::Duration;
 use tokio::time;
 
-use async_std::task;
+use tokio::sync::oneshot;
 
-use serde::Deserialize;
-use serde::Serialize;
+use std::sync::Arc;
 
 //Manager module
 use crate::manager::Context;
@@ -16,63 +14,82 @@ use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
 //Channel module
-use crate::channel::channel;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
-//Producer
+//Producer module
 use crate::producer::Event;
 
 #[derive(Debug, Clone)]
-pub enum ConsumerState {
+pub enum ConsumerProducerState {
     S0 {
         input_vec: Vec<PullChan<Event<()>>>,
+        output_vec: Vec<PushChan<Event<()>>>,
         count: i32,
     },
 }
 
-impl ConsumerState {
+impl ConsumerProducerState {
     pub async fn execute(mut self, ctx: Context) {
-        println!("consumer ON!");
+        println!("ConsumerProducer ON!");
         let mut interval = time::interval(time::Duration::from_millis(200));
-        task::sleep(Duration::from_secs(2)).await;
+
         let mut return_state = match &self {
-            ConsumerState::S0 { input_vec, count } => ConsumerState::S0 {
+            ConsumerProducerState::S0 { input_vec, output_vec, count } => ConsumerProducerState::S0 {
                 input_vec: input_vec.to_owned(),
+                output_vec: output_vec.to_owned(),
                 count: count.to_owned(),
             },
         };
 
         loop {
             self = match &self {
-                ConsumerState::S0 { input_vec, count } => {
-                    //for input in input_vec {
-                    for n in 0..input_vec.len() {
+                
+                ConsumerProducerState::S0 { input_vec, output_vec, count } => {
+                    let mut loc_input_vec = input_vec;
+                    let mut loc_count = count.clone();
+                    let mut loc_out_vec = output_vec;
+                    println!("ConsumerProducer count: {}", count);
+                    for n in 0..output_vec.len() {
+                        println!("ConsumerProducer queue: {:?}", &loc_out_vec[n].0.queue);
+                    }
+
+                    for n in 0..input_vec.len(){
                         tokio::select! {
                             _ = interval.tick() => {
-                                println!("Consumer count is: {},Buffer empty for: {:?}", count, &input_vec[n]);
-
+                                println!("ConsumerProducer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
+                                
                             },
                             event = input_vec[n].pull() => {
                                 match event {
                                     Event::Data(data) => {
                                         let loc_count = count + 1;
-                                        println!("Consumer count is: {}", count);
-                                        println!("The consumer buffer: {:?}", &input_vec[n].0.queue);
+                                        println!("ConsumerProducer count is: {}", loc_count);
+                                        println!("The consumerProducer buffer: {:?}", &input_vec[n].0.queue);
+                                        
+                                        for output in output_vec{ //pushes received message to every consumer (or consumerproducer) operator
+                                            output.push(Event::Data(data)).await;
+                                        }
 
-                                        return_state = ConsumerState::S0 {
+                                        return_state = ConsumerProducerState::S0 {
                                             input_vec: input_vec.to_owned(),
+                                            output_vec: output_vec.to_owned(),
                                             count: loc_count,
                                         };
-                                    },
-                                    Event::Marker => {
+                                },
+                                    Event::Marker => {//TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
                                         //snapshoting
                                         println!("Start consumer snapshotting");
                                         self.store(&ctx).await;
                                         println!("Done with consumer snapshotting");
+                                        
+                                        for output in output_vec{ //pushes received marker to every consumer (or consumerproducer) operator
+                                            output.push(Event::Marker).await;
+                                        }
 
-                                        return_state = ConsumerState::S0 {
+                                        return_state = ConsumerProducerState::S0 {
                                             input_vec: input_vec.to_owned(),
+                                            output_vec: output_vec.to_owned(),
                                             count: count.to_owned(),
                                         };
                                         break; //TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
@@ -88,41 +105,12 @@ impl ConsumerState {
         }
     }
 
-    /*    pub async fn temp(){
-        for input in input {
-            match input.pull().await {
-                Event::Data(data) => {
-                    let loc_count = count + 1;
-                    println!("Consumer count is: {}", count);
-                    println!("The consumer buffer: {:?}", &input.0.queue);
-                    ConsumerState::S0 {
-                        input: input.to_owned(),
-                        count: loc_count,
-                    }
-                    break;
-                },
-                Event::Marker => {
-                    //snapshoting
-                    println!("Start consumer snapshotting");
-                    self.store(&ctx).await;
-                    println!("Done with consumer snapshotting");
-
-                    ConsumerState::S0 {
-                        input: input.to_owned(),
-                        count: count.to_owned(),
-                    }
-                    break;
-                }
-            }
-        }
-    }*/
-
     pub async fn store(&self, ctx: &Context) {
         let mut interval = time::interval(time::Duration::from_millis(100));
         let slf = Arc::new(self.clone().to_owned());
 
         let (send, mut recv) = oneshot::channel();
-        let evnt = TaskToManagerMessage::Serialise(Task::Consumer(self.clone()), send);
+        let evnt = TaskToManagerMessage::Serialise(Task::ConsumerProducer(self.clone()), send);
 
         println!("pushed state snapshot to manager");
         ctx.state_manager_send.push(evnt).await;
@@ -130,7 +118,7 @@ impl ConsumerState {
 
         loop {
             tokio::select! {
-                _ = interval.tick() => println!("Consumer - Another 100ms"),
+                _ = interval.tick() => println!("ConsumerProducer - Another 100ms"),
                 msg = &mut recv => {
                     println!("Got message: {}", msg.unwrap());
                     break;

@@ -87,12 +87,13 @@ impl Task {
                     PersistentTask::Producer(PersistentProducerState::S0 { output, count })
                 }
             },
-            Task::Consumer(state) => match state {
+            Task::Consumer(state) => match state { //never needed?
                 ConsumerState::S0 { input_vec, count } => todo!()/*ConsumerState::S0 { input, count } => {
                     let input = input.to_persistent(serde_state).await;
                     PersistentTask::Consumer(PersistentConsumerState::S0 { input, count })
                 }*/
             },
+            Task::ConsumerProducer(_) => todo!(),
         }
     }
     /*pub async fn from_persistent_task(self, serde_state: &mut SerdeState) -> Task { //Not used

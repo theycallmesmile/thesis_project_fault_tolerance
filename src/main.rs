@@ -8,6 +8,7 @@ pub mod manager;
 pub mod producer;
 pub mod channel;
 pub mod shared;
+pub mod consumerProducer;
 use serde::{Deserialize, Serialize};
 
 

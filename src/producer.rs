@@ -21,6 +21,7 @@ use crate::channel::PushChan;
 pub enum Event<i32> {
     Data(i32),
     Marker,
+    MessageAmount(i32),
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +35,8 @@ pub enum ProducerState {
 impl ProducerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("producer ON!");
-        let mut interval = time::interval(time::Duration::from_millis(100));
+        let mut interval = time::interval(time::Duration::from_millis(200));
+        let mut message_amount = 0;
 
         let mut return_state = match &self {
             ProducerState::S0 { output_vec, count } => ProducerState::S0 {
@@ -55,36 +57,44 @@ impl ProducerState {
 
                     tokio::select! {
                         _ = interval.tick() => {
-                            for n in 0..output_vec.len() {
-                                tokio::select! {
-                                    //send data to consumer
-                                    _ = interval.tick() => {
-                                        println!("buffer might be full, going trying with next consumer instead.");
-                                        println!("amount of elements in buffer: {:?}, out of 15.", &output_vec[n].0.queue);
-                                    },
-                                    event = loc_out[n].push(Event::Data(())) => {
-                                        loc_count = count + 1;
+                            if(message_amount > 0){
+                                for n in 0..output_vec.len() {
+                                    tokio::select! {
+                                        //send data to consumer
+                                        _ = interval.tick() => {
+                                            println!("buffer might be full, going trying with next consumer instead.");
+                                            println!("amount of elements in buffer: {:?}, out of 15.", &output_vec[n].0.queue);
+                                        },
+                                        event = loc_out[n].push(Event::Data(())) => {
+                                            loc_count = count + 1;
+                                        }
                                     }
                                 }
+                                message_amount -= 1;
                             }
                         },
                         //snapshot and send marker to consumer
                         msg = ctx.marker_manager_recv.as_ref().unwrap().pull() => {
-                            for n in 0..output_vec.len() {
-                                //snapshoting
-                                println!("start producer snapshotting");
-                                self.store(&ctx).await;
-                                println!("done with producer snapshotting");
-    
-                                //forward the marker to consumers
-                                println!("SENDING MARKER!");
-                                loc_out[n].push(Event::Marker).await;
+                            match msg {
+                                Event::Data(_) => {},
+                                Event::Marker => {
+                                    for n in 0..output_vec.len() {
+                                        //snapshoting
+                                        println!("start producer snapshotting");
+                                        self.store(&ctx).await;
+                                        println!("done with producer snapshotting");
+
+                                        //forward the marker to consumers
+                                        println!("SENDING MARKER!");
+                                        loc_out[n].push(Event::Marker).await;
+                                    }
+                                },
+                                Event::MessageAmount(amount) => message_amount += 10,//+= amount, <----- supposed to be amount, need to be fixed
                             }
                         }
                     }
                     ProducerState::S0 {
                         output_vec: output_vec.to_owned(),
-                        //marker_rec: marker_rec.to_owned(),
                         count: loc_count,
                     }
                 }
