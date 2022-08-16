@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
+use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time;
 
@@ -49,54 +50,60 @@ impl ConsumerProducerState {
                     let mut loc_input_vec = input_vec;
                     let mut loc_count = count.clone();
                     let mut loc_out_vec = output_vec;
+                    let mut snapshot_counter:HashSet<usize> = HashSet::new();
                     println!("ConsumerProducer count: {}", count);
                     for n in 0..output_vec.len() {
                         println!("ConsumerProducer queue: {:?}", &loc_out_vec[n].0.queue);
                     }
-
                     for n in 0..input_vec.len(){
-                        tokio::select! {
-                            _ = interval.tick() => {
-                                println!("ConsumerProducer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
-                                
-                            },
-                            event = input_vec[n].pull() => {
-                                match event {
-                                    Event::Data(data) => {
-                                        let loc_count = count + 1;
-                                        println!("ConsumerProducer count is: {}", loc_count);
-                                        println!("The consumerProducer buffer: {:?}", &input_vec[n].0.queue);
-                                        
-                                        for output in output_vec{ //pushes received message to every consumer (or consumerproducer) operator
-                                            output.push(Event::Data(data)).await;
-                                        }
-
-                                        return_state = ConsumerProducerState::S0 {
-                                            input_vec: input_vec.to_owned(),
-                                            output_vec: output_vec.to_owned(),
-                                            count: loc_count,
-                                        };
+                        if !snapshot_counter.contains(&n) && !snapshot_counter.len().eq(&input_vec.len()){
+                            tokio::select! {
+                                _ = interval.tick() => {
+                                    println!("ConsumerProducer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
+                                    
                                 },
-                                    Event::Marker => {//TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
-                                        //snapshoting
-                                        println!("Start consumer snapshotting");
-                                        self.store(&ctx).await;
-                                        println!("Done with consumer snapshotting");
-                                        
-                                        for output in output_vec{ //pushes received marker to every consumer (or consumerproducer) operator
-                                            output.push(Event::Marker).await;
-                                        }
+                                event = input_vec[n].pull() => {
+                                    match event {
+                                        Event::Data(data) => {
+                                            let loc_count = count + 1;
+                                            println!("ConsumerProducer count is: {}", loc_count);
+                                            println!("The consumerProducer buffer: {:?}", &input_vec[n].0.queue);
+                                            
+                                            for output in output_vec{ //pushes received message to every consumer (or consumerProducer) operator
+                                                output.push(Event::Data(data)).await;
+                                            }
 
-                                        return_state = ConsumerProducerState::S0 {
-                                            input_vec: input_vec.to_owned(),
-                                            output_vec: output_vec.to_owned(),
-                                            count: count.to_owned(),
-                                        };
-                                        break; //TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
+                                            return_state = ConsumerProducerState::S0 {
+                                                input_vec: input_vec.to_owned(),
+                                                output_vec: output_vec.to_owned(),
+                                                count: loc_count,
+                                            };
                                     },
-                                    Event::MessageAmount(amount) => {},
-                                }
-                            },
+                                        Event::Marker => {
+                                            if snapshot_counter.is_empty(){
+                                                for output in output_vec{ //pushes received marker to every consumer (or consumerProducer) operator
+                                                    output.push(Event::Marker).await;
+                                                }
+                                            }
+                                            //add to the snapshot_count
+                                            snapshot_counter.insert(n);
+
+                                            return_state = ConsumerProducerState::S0 {
+                                                input_vec: input_vec.to_owned(),
+                                                output_vec: output_vec.to_owned(),
+                                                count: count.to_owned(),
+                                            };
+                                        },
+                                        Event::MessageAmount(amount) => {},
+                                    }
+                                },
+                            }
+                        } else if snapshot_counter.len().eq(&input_vec.len()){
+                            //snapshoting
+                            println!("Start consumer snapshotting");
+                            self.store(&ctx).await;
+                            println!("Done with consumer snapshotting");
+                            snapshot_counter.clear();
                         }
                     }
                     return_state.clone()

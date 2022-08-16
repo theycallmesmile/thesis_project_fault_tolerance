@@ -78,12 +78,11 @@ impl ProducerState {
                             match msg {
                                 Event::Data(_) => {},
                                 Event::Marker => {
+                                    //snapshoting
+                                    println!("start producer snapshotting");
+                                    self.store(&ctx).await;
+                                    println!("done with producer snapshotting");
                                     for n in 0..output_vec.len() {
-                                        //snapshoting
-                                        println!("start producer snapshotting");
-                                        self.store(&ctx).await;
-                                        println!("done with producer snapshotting");
-
                                         //forward the marker to consumers
                                         println!("SENDING MARKER!");
                                         loc_out[n].push(Event::Marker).await;
