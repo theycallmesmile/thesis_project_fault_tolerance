@@ -36,7 +36,11 @@ impl ConsumerProducerState {
         let mut interval = time::interval(time::Duration::from_millis(200));
 
         let mut return_state = match &self {
-            ConsumerProducerState::S0 { input_vec, output_vec, count } => ConsumerProducerState::S0 {
+            ConsumerProducerState::S0 {
+                input_vec,
+                output_vec,
+                count,
+            } => ConsumerProducerState::S0 {
                 input_vec: input_vec.to_owned(),
                 output_vec: output_vec.to_owned(),
                 count: count.to_owned(),
@@ -45,22 +49,27 @@ impl ConsumerProducerState {
 
         loop {
             self = match &self {
-                
-                ConsumerProducerState::S0 { input_vec, output_vec, count } => {
+                ConsumerProducerState::S0 {
+                    input_vec,
+                    output_vec,
+                    count,
+                } => {
                     let mut loc_input_vec = input_vec;
                     let mut loc_count = count.clone();
                     let mut loc_out_vec = output_vec;
-                    let mut snapshot_counter:HashSet<usize> = HashSet::new();
+                    let mut snapshot_counter: HashSet<usize> = HashSet::new();
                     println!("ConsumerProducer count: {}", count);
                     for n in 0..output_vec.len() {
                         println!("ConsumerProducer queue: {:?}", &loc_out_vec[n].0.queue);
                     }
-                    for n in 0..input_vec.len(){
-                        if !snapshot_counter.contains(&n) && !snapshot_counter.len().eq(&input_vec.len()){
+                    for n in 0..input_vec.len() {
+                        if !snapshot_counter.contains(&n)
+                            && !snapshot_counter.len().eq(&input_vec.len())
+                        {
                             tokio::select! {
                                 _ = interval.tick() => {
                                     println!("ConsumerProducer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
-                                    
+
                                 },
                                 event = input_vec[n].pull() => {
                                     match event {
@@ -68,7 +77,7 @@ impl ConsumerProducerState {
                                             let loc_count = count + 1;
                                             println!("ConsumerProducer count is: {}", loc_count);
                                             println!("The consumerProducer buffer: {:?}", &input_vec[n].0.queue);
-                                            
+
                                             for output in output_vec{ //pushes received message to every consumer (or consumerProducer) operator
                                                 output.push(Event::Data(data)).await;
                                             }
@@ -78,7 +87,7 @@ impl ConsumerProducerState {
                                                 output_vec: output_vec.to_owned(),
                                                 count: loc_count,
                                             };
-                                    },
+                                        },
                                         Event::Marker => {
                                             if snapshot_counter.is_empty(){
                                                 for output in output_vec{ //pushes received marker to every consumer (or consumerProducer) operator
@@ -98,7 +107,7 @@ impl ConsumerProducerState {
                                     }
                                 },
                             }
-                        } else if snapshot_counter.len().eq(&input_vec.len()){
+                        } else if snapshot_counter.len().eq(&input_vec.len()) {
                             //snapshoting
                             println!("Start consumer snapshotting");
                             self.store(&ctx).await;

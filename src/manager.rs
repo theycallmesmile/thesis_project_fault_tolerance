@@ -125,7 +125,7 @@ impl Manager {
 
         //Giving permission to sourceProducers to create and send X amount of messages to connected operators.
         for prod_chan in &self.marker_chan_vec {
-            prod_chan.0.push(Event::MessageAmount(())); //TODO , FIX the empty amount!
+            prod_chan.0.push(Event::MessageAmount(10));
         }
 
         //Sleeping before sending a marker to the source-producers

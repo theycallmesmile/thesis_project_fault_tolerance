@@ -14,3 +14,4 @@ console-subscriber = "0.1.6"
 async-std = {version = "1.12.0", features=  ["unstable", "attributes", "tokio1"]}
 lazy_static = "1.4.0"
 uid = "0.1.7"
+futures = "0.3.23"

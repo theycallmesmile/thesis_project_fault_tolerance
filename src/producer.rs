@@ -18,8 +18,8 @@ use crate::channel::PullChan;
 use crate::channel::PushChan;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
-pub enum Event<i32> {
-    Data(i32),
+pub enum Event<T> {
+    Data(T),
     Marker,
     MessageAmount(i32),
 }
@@ -36,7 +36,6 @@ impl ProducerState {
     pub async fn execute(mut self, ctx: Context) {
         println!("producer ON!");
         let mut interval = time::interval(time::Duration::from_millis(200));
-        let mut message_amount = 0;
 
         let mut return_state = match &self {
             ProducerState::S0 { output_vec, count } => ProducerState::S0 {
@@ -54,10 +53,27 @@ impl ProducerState {
                     for n in 0..output_vec.len() {
                         println!("producer queue: {:?}", &loc_out[n].0.queue);
                     }
-
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            if(message_amount > 0){
+                    //snapshot and send marker to consumer
+                    let msg = ctx.marker_manager_recv.as_ref().unwrap().pull().await;
+                    match msg {
+                        Event::Data(_) => {}
+                        Event::Marker => {
+                            //snapshoting
+                            println!("start producer snapshotting");
+                            self.store(&ctx).await;
+                            println!("done with producer snapshotting");
+                            for n in 0..output_vec.len() {
+                                //forward the marker to consumers
+                                println!("SENDING MARKER!");
+                                loc_out[n].push(Event::Marker).await;
+                            }
+                        }
+                        Event::MessageAmount(amount) => {
+                            for x in 0..amount {
+                                for output in output_vec {
+                                    output.push(Event::Data(())).await;
+                                    loc_count = count + 1;
+                                }
                                 for n in 0..output_vec.len() {
                                     tokio::select! {
                                         //send data to consumer
@@ -70,28 +86,10 @@ impl ProducerState {
                                         }
                                     }
                                 }
-                                message_amount -= 1;
-                            }
-                        },
-                        //snapshot and send marker to consumer
-                        msg = ctx.marker_manager_recv.as_ref().unwrap().pull() => {
-                            match msg {
-                                Event::Data(_) => {},
-                                Event::Marker => {
-                                    //snapshoting
-                                    println!("start producer snapshotting");
-                                    self.store(&ctx).await;
-                                    println!("done with producer snapshotting");
-                                    for n in 0..output_vec.len() {
-                                        //forward the marker to consumers
-                                        println!("SENDING MARKER!");
-                                        loc_out[n].push(Event::Marker).await;
-                                    }
-                                },
-                                Event::MessageAmount(amount) => message_amount += 10,//+= amount, <----- supposed to be amount, need to be fixed
                             }
                         }
                     }
+
                     ProducerState::S0 {
                         output_vec: output_vec.to_owned(),
                         count: loc_count,

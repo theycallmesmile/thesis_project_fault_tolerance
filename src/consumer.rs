@@ -53,7 +53,7 @@ impl ConsumerState {
                         if !snapshot_counter.contains(&n) && !snapshot_counter.len().eq(&input_vec.len()){
                             tokio::select! {
                                 _ = interval.tick() => {
-                                    println!("Consumer count is: {},Buffer empty for: {:?}", count, &input_vec[n]);
+                                    println!("Consumer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
 
                                 },
                                 event = input_vec[n].pull() => {
@@ -76,7 +76,6 @@ impl ConsumerState {
                                                 input_vec: input_vec.to_owned(),
                                                 count: count.to_owned(),
                                             };
-                                            break; //TODO; NEED TO WAIT FOR ALL OF THE MARKERS BEFORE PROCEEDING PROCESSING MORE MESSAGES FROM THE SAME CHANNEL!
                                         },
                                         Event::MessageAmount(amount) => {},
                                     }
