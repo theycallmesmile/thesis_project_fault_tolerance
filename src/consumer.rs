@@ -23,6 +23,10 @@ use crate::channel::PushChan;
 //Producer
 use crate::producer::Event;
 
+//Shared module
+use crate::shared::SharedState;
+use crate::shared::Shared;
+
 #[derive(Debug, Clone)]
 pub enum ConsumerState {
     S0 {
@@ -48,7 +52,6 @@ impl ConsumerState {
         loop {
             self = match &self {
                 ConsumerState::S0 { input_vec, count } => {
-                    //for input in input_vec {
                     for n in 0..input_vec.len() {
                         if !snapshot_counter.contains(&n) && !snapshot_counter.len().eq(&input_vec.len()){
                             tokio::select! {
@@ -84,7 +87,8 @@ impl ConsumerState {
                         } else if snapshot_counter.len().eq(&input_vec.len()){
                             //snapshoting
                             println!("Start consumer snapshotting");
-                            self.store(&ctx).await;
+                            //self.store(&ctx).await;
+                            Shared::<()>::store(SharedState::Consumer(self.clone()), &ctx).await;
                             println!("Done with consumer snapshotting");
                             snapshot_counter.clear();
                         }
@@ -93,57 +97,5 @@ impl ConsumerState {
                 }
             }
         }
-    }
-
-    /*    pub async fn temp(){
-        for input in input {
-            match input.pull().await {
-                Event::Data(data) => {
-                    let loc_count = count + 1;
-                    println!("Consumer count is: {}", count);
-                    println!("The consumer buffer: {:?}", &input.0.queue);
-                    ConsumerState::S0 {
-                        input: input.to_owned(),
-                        count: loc_count,
-                    }
-                    break;
-                },
-                Event::Marker => {
-                    //snapshoting
-                    println!("Start consumer snapshotting");
-                    self.store(&ctx).await;
-                    println!("Done with consumer snapshotting");
-
-                    ConsumerState::S0 {
-                        input: input.to_owned(),
-                        count: count.to_owned(),
-                    }
-                    break;
-                }
-            }
-        }
-    }*/
-
-    pub async fn store(&self, ctx: &Context) {
-        let mut interval = time::interval(time::Duration::from_millis(100));
-        let slf = Arc::new(self.clone().to_owned());
-
-        let (send, mut recv) = oneshot::channel();
-        let evnt = TaskToManagerMessage::Serialise(Task::Consumer(self.clone()), send);
-
-        println!("pushed state snapshot to manager");
-        ctx.state_manager_send.push(evnt).await;
-        println!("waiting for promise");
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => println!("Consumer - Another 100ms"),
-                msg = &mut recv => {
-                    println!("Got message: {}", msg.unwrap());
-                    break;
-                }
-            }
-        }
-        println!("got the promise!");
     }
 }

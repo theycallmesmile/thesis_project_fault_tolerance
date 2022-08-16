@@ -17,6 +17,10 @@ use crate::manager::TaskToManagerMessage;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
+//Shared module
+use crate::shared::SharedState;
+use crate::shared::Shared;
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Event<T> {
     Data(T),
@@ -60,7 +64,8 @@ impl ProducerState {
                         Event::Marker => {
                             //snapshoting
                             println!("start producer snapshotting");
-                            self.store(&ctx).await;
+                            //self.store(&ctx).await;
+                            Shared::<()>::store(SharedState::Producer(self.clone()), &ctx).await;
                             println!("done with producer snapshotting");
                             for n in 0..output_vec.len() {
                                 //forward the marker to consumers
@@ -97,28 +102,5 @@ impl ProducerState {
                 }
             }
         }
-    }
-
-    pub async fn store(&self, ctx: &Context) {
-        let mut interval = time::interval(time::Duration::from_millis(100));
-        let slf = Arc::new(self.clone().to_owned());
-
-        let (send, mut recv) = oneshot::channel();
-        let evnt = TaskToManagerMessage::Serialise(Task::Producer(self.clone()), send);
-
-        println!("pushed state snapshot to manager");
-        ctx.state_manager_send.push(evnt).await;
-        println!("waiting for promise");
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => println!("Producer - Another 100ms"),
-                msg = &mut recv => {
-                    println!("Got message: {}", msg.unwrap());
-                    break;
-                }
-            }
-        }
-        println!("got the promise!");
     }
 }

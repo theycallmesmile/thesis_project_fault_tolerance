@@ -21,6 +21,10 @@ use crate::channel::PushChan;
 //Producer module
 use crate::producer::Event;
 
+//Shared module
+use crate::shared::SharedState;
+use crate::shared::Shared;
+
 #[derive(Debug, Clone)]
 pub enum ConsumerProducerState {
     S0 {
@@ -110,7 +114,7 @@ impl ConsumerProducerState {
                         } else if snapshot_counter.len().eq(&input_vec.len()) {
                             //snapshoting
                             println!("Start consumer snapshotting");
-                            self.store(&ctx).await;
+                            Shared::<()>::store(SharedState::ConsumerProducer(self.clone()), &ctx).await;
                             println!("Done with consumer snapshotting");
                             snapshot_counter.clear();
                         }
@@ -119,28 +123,5 @@ impl ConsumerProducerState {
                 }
             }
         }
-    }
-
-    pub async fn store(&self, ctx: &Context) {
-        let mut interval = time::interval(time::Duration::from_millis(100));
-        let slf = Arc::new(self.clone().to_owned());
-
-        let (send, mut recv) = oneshot::channel();
-        let evnt = TaskToManagerMessage::Serialise(Task::ConsumerProducer(self.clone()), send);
-
-        println!("pushed state snapshot to manager");
-        ctx.state_manager_send.push(evnt).await;
-        println!("waiting for promise");
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => println!("ConsumerProducer - Another 100ms"),
-                msg = &mut recv => {
-                    println!("Got message: {}", msg.unwrap());
-                    break;
-                }
-            }
-        }
-        println!("got the promise!");
     }
 }
