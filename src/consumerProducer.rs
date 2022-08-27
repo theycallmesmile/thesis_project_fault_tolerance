@@ -225,81 +225,28 @@ impl ConsumerProducerState {
                     //in_out_map,
                     count,
                 } => {
-                    let mut loc_input_vec = input_vec;
-                    let mut loc_count = count.clone();
-                    let mut loc_out_vec = output_vec;
-                    let mut snapshot_counter: HashSet<usize> = HashSet::new();
-                    let mut event_vec: Vec<Event<i32>> = Vec::new();
-
-                    println!("ConsumerProducer count: {}", count);
-                    for n in 0..output_vec.len() {
-                        println!("ConsumerProducer queue: {:?}", &loc_out_vec[n].0.queue);
-                    }
-
-                    
-                    
-                    
-                    /*
-                    let in_stream0 = input_vec.to_owned().pop().unwrap();
-                    let in_stream1 = input_vec.to_owned().pop().unwrap();
-                    let in_stream2 = input_vec.to_owned().pop().unwrap();
-
-                    let out_stream0 = output_vec.to_owned().pop().unwrap();
-                    let out_stream1 = output_vec.to_owned().pop().unwrap();*/
-
                     //state -> s0
-                    return_state = ConsumerProducerState::S0 { input_vec: input_vec.clone(), output_vec: output_vec.clone(), count: count.clone() };
                     let in_event0 = input_vec[0].pull().await;
                     match in_event0 {
                         Event::Data(event_data_s0) => {
                             //state -> s1
-                            return_state = ConsumerProducerState::S1 { input_vec: input_vec.clone(), output_vec: output_vec.clone(), count: count.clone(), data: event_data_s0 };
-                            let in_event1 = input_vec[1].pull().await;
-                            match in_event1 {
-                                Event::Data(event_data_s1) => {
-                                    output_vec[0]
-                                        .push(Event::Data(event_data_s0 + event_data_s1))
-                                        .await;
-                                }
-                                Event::Marker => {     
-                                    //s1                               
-                                }
-                                Event::MessageAmount(_) => panic!(),
+                            ConsumerProducerState::S1 {
+                                input_vec: input_vec.clone(),
+                                output_vec: output_vec.clone(),
+                                count: count.clone(),
+                                data: event_data_s0,
                             }
                         }
                         Event::Marker => {
                             //s0
-                            return_state = ConsumerProducerState::S0 {
+                            ConsumerProducerState::S0 {
                                 input_vec: input_vec.clone(),
                                 output_vec: output_vec.clone(),
                                 count: count.clone(),
-                            };
+                            }
                         }
                         Event::MessageAmount(_) => panic!(),
                     }
-
-                    
-                    //s2 Nothing to do with the first and second stream, should not block them during snapshotting
-                    return_state = ConsumerProducerState::S2 {
-                        input_vec: input_vec.clone(),
-                        output_vec: output_vec.clone(),
-                        count: count.clone(),
-                    };
-                    let in_event2 = input_vec[2].pull().await;
-                    match in_event2 {
-                        Event::Data(event_data_s2) => {
-                            output_vec[1].push(Event::Data(event_data_s2)).await
-                        }
-                        Event::Marker => {
-                            return_state = ConsumerProducerState::S2 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
-                                count: count.clone(),
-                            };
-                        }
-                        Event::MessageAmount(_) => panic!(),
-                    }
-                    return_state.clone()
                 }
                 ConsumerProducerState::S1 {
                     input_vec,
@@ -307,67 +254,99 @@ impl ConsumerProducerState {
                     count,
                     data,
                 } => {
-
-
-                    ConsumerProducerState::S1 {
-                        input_vec: input_vec.to_owned(),
-                        output_vec: output_vec.to_owned(),
-                        count: count.to_owned(),
-                        data: data.to_owned(),
+                    let in_event1 = input_vec[1].pull().await;
+                    match in_event1 {
+                        Event::Data(event_data_s1) => {
+                            output_vec[0]
+                                .push(Event::Data(data.clone() + event_data_s1))
+                                .await;
+                            ConsumerProducerState::S2 {
+                                input_vec: input_vec.clone(),
+                                output_vec: output_vec.clone(),
+                                count: count.clone(),
+                            }
+                        }
+                        Event::Marker => {
+                            //s1
+                            ConsumerProducerState::S1 {
+                                input_vec: input_vec.clone(),
+                                output_vec: output_vec.clone(),
+                                count: count.clone(),
+                                data: data.clone(),
+                            }
+                        }
+                        Event::MessageAmount(_) => panic!(),
                     }
                 }
                 ConsumerProducerState::S2 {
                     input_vec,
                     output_vec,
                     count,
-                } => ConsumerProducerState::S2 {
-                    input_vec: input_vec.to_owned(),
-                    output_vec: output_vec.to_owned(),
-                    count: count.to_owned(),
-                },
-            }
+                } => {
+                    //s2 Nothing to do with the first and second stream, should not block them during snapshotting
+                    let in_event2 = input_vec[2].pull().await;
+                    match in_event2 {
+                        Event::Data(event_data_s2) => {
+                            output_vec[1].push(Event::Data(event_data_s2)).await;
+                            ConsumerProducerState::S0 {
+                                input_vec: input_vec.clone(),
+                                output_vec: output_vec.clone(),
+                                count: count.clone(),
+                            }
+                        }
+                        Event::Marker => {
+                            ConsumerProducerState::S2 {
+                                input_vec: input_vec.clone(),
+                                output_vec: output_vec.clone(),
+                                count: count.clone(),
+                            }
+                        }
+                        Event::MessageAmount(_) => panic!(),
+                    }
+                }
+            };
         }
     }
-
-    /*pub async fn merge(
-        in_vec: &Vec<PullChan<Event<i32>>>,
-        out_vec: &Vec<PushChan<Event<i32>>>,
-        in_count: &i32,
-        ctx: Context,
-    ) {
-        loop {
-            loop {
-                //s0
-                let event0 = match in_vec[0].pull().await {
-                    Event::Data(event_data) => Some(event_data),
-                    Event::Marker => {
-                        let mut new_state = ConsumerProducerState::S0 {
-                            input_vec: in_vec.clone(),
-                            output_vec: out_vec.clone(),
-                            count: in_count.clone(),
-                        };
-                        Shared::<()>::store(SharedState::ConsumerProducer(new_state), &ctx).await;
-                        break;
-                    }
-                    Event::MessageAmount(_) => panic!(),
-                }.unwrap();
-                //s1
-                let event1 = match in_vec[1].pull().await {
-                    Event::Data(event_data) => Some(event_data),
-                    Event::Marker => {
-                        let new_state = ConsumerProducerState::S1 {
-                            input_vec: in_vec.clone(),
-                            output_vec: out_vec.clone(),
-                            count: in_count.clone(),
-                            data: event0,
-                        };
-                        Shared::<()>::store(SharedState::ConsumerProducer(new_state), &ctx).await;
-                        break;
-                    }
-                    Event::MessageAmount(_) => panic!(),
-                }.unwrap();
-                out_vec[0].push(Event::Data((event0 + event1))).await;
-            }
-        }
-    } */
 }
+
+/*pub async fn merge(
+    in_vec: &Vec<PullChan<Event<i32>>>,
+    out_vec: &Vec<PushChan<Event<i32>>>,
+    in_count: &i32,
+    ctx: Context,
+) {
+    loop {
+        loop {
+            //s0
+            let event0 = match in_vec[0].pull().await {
+                Event::Data(event_data) => Some(event_data),
+                Event::Marker => {
+                    let mut new_state = ConsumerProducerState::S0 {
+                        input_vec: in_vec.clone(),
+                        output_vec: out_vec.clone(),
+                        count: in_count.clone(),
+                    };
+                    Shared::<()>::store(SharedState::ConsumerProducer(new_state), &ctx).await;
+                    break;
+                }
+                Event::MessageAmount(_) => panic!(),
+            }.unwrap();
+            //s1
+            let event1 = match in_vec[1].pull().await {
+                Event::Data(event_data) => Some(event_data),
+                Event::Marker => {
+                    let new_state = ConsumerProducerState::S1 {
+                        input_vec: in_vec.clone(),
+                        output_vec: out_vec.clone(),
+                        count: in_count.clone(),
+                        data: event0,
+                    };
+                    Shared::<()>::store(SharedState::ConsumerProducer(new_state), &ctx).await;
+                    break;
+                }
+                Event::MessageAmount(_) => panic!(),
+            }.unwrap();
+            out_vec[0].push(Event::Data((event0 + event1))).await;
+        }
+    }
+} */
