@@ -20,17 +20,16 @@ use crate::channel::channel;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
-//Producer
-use crate::producer::Event;
 
 //Shared module
 use crate::shared::SharedState;
 use crate::shared::Shared;
+use crate::shared::Event;
 
 #[derive(Debug, Clone)]
 pub enum ConsumerState {
     S0 {
-        input_vec: Vec<PullChan<Event<()>>>,
+        input_vec: Vec<PullChan<Event<i32>>>,
         count: i32,
     },
 }
@@ -87,7 +86,6 @@ impl ConsumerState {
                         } else if snapshot_counter.len().eq(&input_vec.len()){
                             //snapshoting
                             println!("Start consumer snapshotting");
-                            //self.store(&ctx).await;
                             Shared::<()>::store(SharedState::Consumer(self.clone()), &ctx).await;
                             println!("Done with consumer snapshotting");
                             snapshot_counter.clear();

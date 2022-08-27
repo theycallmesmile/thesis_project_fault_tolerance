@@ -8,8 +8,8 @@ use async_std::sync::{Condvar, Mutex};
 use serde::Deserialize;
 use serde::Serialize;
 
-//producer module
-use crate::producer::Event;
+//shared module
+use crate::shared::Event;
 
 
 pub const CAPACITY: usize = 15;
@@ -190,7 +190,7 @@ impl<T:  std::fmt::Debug> PullChan<T> {
             .0
             .pullvar
             .wait_until(queue, |queue| {
-                println!("****Checking pull condition for {:?}", queue);
+                //println!("****Checking pull condition for {:?}", queue);
                 !queue.is_empty()
             })
             .await;
@@ -220,34 +220,6 @@ impl<T: Clone + std::fmt::Debug> PushChan<T> {
     pub async fn get_chan(&self) -> Arc<Chan<T>>{
         self.0.clone()
     }
-
-    /*pub async fn push_snapshot(&self) {
-        println!("Sending snapshot");
-        println!("Trying to acquire lock for snapshot-push");
-        let mut queue = self.0.queue.lock().await;
-        println!(
-            "Trying to snapshot-push into queue with length: {} / {}",
-            queue.len(),
-            queue.capacity()
-        );
-        queue = self
-            .0
-            .pushvar
-            .wait_until(queue, |queue| {
-                println!("Checking snapshot-push condition for {:?}", queue);
-                queue.len() < queue.capacity()
-            })
-            .await;
-        println!(
-            "Snapshot-Pushing into queue with length: {} / {}",
-            queue.len(),
-            queue.capacity()
-        );
-        //queue.push_back(data);
-        drop(queue);
-        self.0.pullvar.notify_one();
-        println!("Snapshot-pushing done");
-    }*/
 }
 
 

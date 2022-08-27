@@ -16,6 +16,7 @@ use serde::Serialize;
 use crate::channel::channel_vec;
 use crate::channel::CAPACITY;
 use crate::consumerProducer::ConsumerProducerState;
+
 //Serialize module
 use crate::serialization::load_deserialize;
 use crate::serialization::load_persistent;
@@ -30,7 +31,6 @@ use crate::serialization::SerdeState;
 use crate::consumer::ConsumerState;
 
 //Producer module
-use crate::producer::Event;
 use crate::producer::ProducerState;
 
 //Channel module
@@ -39,6 +39,9 @@ use crate::channel::channel_load;
 use crate::channel::channel_manager;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
+
+//Shared module 
+use crate::shared::Event;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -89,8 +92,8 @@ pub enum Operators {
 
 #[derive(Debug)]
 pub enum OperatorChannels {
-    Push(PushChan<Event<()>>),
-    Pull(PullChan<Event<()>>),
+    Push(PushChan<Event<i32>>),
+    Pull(PullChan<Event<i32>>),
 }
 
 impl Task {
@@ -98,7 +101,7 @@ impl Task {
         match self {
             Task::Consumer(state) => async_std::task::spawn(state.execute(ctx)),
             Task::Producer(state) => async_std::task::spawn(state.execute(ctx)),
-            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute(ctx)),
+            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
         }
     }
 }
@@ -205,7 +208,7 @@ pub async fn spawn_operators(
     self_manager: &mut Manager,
     operator_connections: HashMap<Operators, Vec<Operators>>,
 ) -> Vec<async_std::task::JoinHandle<()>> {
-    let mut operator_channel: HashMap<Operators, Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>> =
+    let mut operator_channel: HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>> =
         HashMap::new(); //store operator in/out channels
     let mut operator_state_chan: HashMap<Operators, Vec<OperatorChannels>> = HashMap::new();
 
@@ -233,8 +236,7 @@ pub async fn spawn_operators(
         match operator.0 {
             Operators::SourceProducer(_) => {
                 let chan =
-                    operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
-                        .await;
+                    operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap()).await;
                 let prod_state = ProducerState::S0 {
                     output_vec: chan.clone(),
                     count: 0,
@@ -269,9 +271,11 @@ pub async fn spawn_operators(
                 let out_chan =
                     operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
                         .await;
+                //let mut in_out_hash: HashMap<Vec<PullChan<Event<i32>>>, Vec<PushChan<Event<i32>>>> = HashMap::new();                
                 let cons_prod_state = ConsumerProducerState::S0 {
                     input_vec: in_chan,
                     output_vec: out_chan,
+                    //in_out_map: in_out_hash,
                     count: 0,
                 };
                 let cons_prod_ctx = Context {
@@ -283,18 +287,22 @@ pub async fn spawn_operators(
             }
         }
     }
+
+    loop { //REMOVE THIS
+
+    }
     task_op_spawn_vec
 }
 
 async fn init_channels(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
-    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>>,
+    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
 ) {
     //creating channels for source producers and consumer_producers. Every prod/con_prod will have a separate channel with connected operator
     //create as a new func?
     for connection in operator_connections {
-        let chan_vec = channel_vec::<Event<()>>(connection.1.clone().len());
+        let chan_vec = channel_vec::<Event<i32>>(connection.1.clone().len());
         operator_channel.insert(connection.0.to_owned(), chan_vec);
     }
     init_operator_push_channels(operator_connections, operator_channel, operator_state_chan).await;
@@ -302,7 +310,7 @@ async fn init_channels(
 
 async fn init_operator_push_channels(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
-    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>>,
+    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
 ) {
     for connection in operator_connections {
@@ -318,7 +326,7 @@ async fn init_operator_push_channels(
 
 async fn init_pull_channels(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
-    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>>,
+    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
 ) {
     //Giving pull channels to the consumer and consumerProducer operators
@@ -329,7 +337,10 @@ async fn init_pull_channels(
         let mut count = 0;
         for connection_val in connection.1 {
             match connection_val {
-                Operators::SourceProducer(_) => { /*should never enter here */ }
+                Operators::SourceProducer(_) => {
+                    println!("This should not happen, ERROR!");
+                    panic!();
+                }
                 Operators::Consumer(_) => {
                     if operator_state_chan.contains_key(&connection_val) {
                         //add a new chan to the vector and update the vector
@@ -366,7 +377,7 @@ async fn init_pull_channels(
 
 async fn operator_channel_to_pull_vec(
     operator_chan: &Vec<OperatorChannels>,
-) -> Vec<PullChan<Event<()>>> {
+) -> Vec<PullChan<Event<i32>>> {
     let mut pull_vec = Vec::new();
     for chan in operator_chan {
         match chan {
@@ -379,7 +390,7 @@ async fn operator_channel_to_pull_vec(
 
 async fn operator_channel_to_push_vec(
     operator_chan: &Vec<OperatorChannels>,
-) -> Vec<PushChan<Event<()>>> {
+) -> Vec<PushChan<Event<i32>>> {
     let mut push_vec = Vec::new();
     for chan in operator_chan {
         match chan {
@@ -443,11 +454,11 @@ pub fn manager() {
     let mut operator_connections: HashMap<Operators, Vec<Operators>> = HashMap::new(); //init dataflow graph
     
     //creating the dataflow graph
-    operator_connections.insert(
-        Operators::SourceProducer(1),
-        vec![Operators::ConsumerProducer(1)],
-    );
+    operator_connections.insert(Operators::SourceProducer(1), vec![Operators::ConsumerProducer(1)]);
+    operator_connections.insert(Operators::SourceProducer(2), vec![Operators::ConsumerProducer(1)]);
+    operator_connections.insert(Operators::SourceProducer(3), vec![Operators::ConsumerProducer(1)]);
     operator_connections.insert(Operators::ConsumerProducer(1), vec![Operators::Consumer(1)]);
+    operator_connections.insert(Operators::ConsumerProducer(1), vec![Operators::Consumer(2)]);
 
     //push: from the operator to the manager(fe, state), filling the buffer
     //pull: manager can pull from the buffer

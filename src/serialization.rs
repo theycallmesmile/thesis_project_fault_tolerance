@@ -23,11 +23,13 @@ use crate::channel::PullChan;
 use crate::channel::PushChan;
 
 //Producer module
-use crate::producer::Event;
 use crate::producer::ProducerState;
 
 //Consumer module
 use crate::consumer::ConsumerState;
+
+//Shared module
+use crate::shared::Event;
 
 unsafe impl Send for SerdeState {}
 unsafe impl Sync for SerdeState {}
@@ -49,7 +51,7 @@ pub enum PersistentTask {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentProducerState {
     S0 {
-        output: PersistentPushChan<Event<()>>,
+        output: PersistentPushChan<Event<i32>>,
         count: i32,
     },
 }
@@ -57,7 +59,7 @@ pub enum PersistentProducerState {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentConsumerState {
     S0 {
-        input: PersistentPullChan<Event<()>>,
+        input: PersistentPullChan<Event<i32>>,
         count: i32,
     },
 }
@@ -80,7 +82,6 @@ impl Task {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
                     output_vec,
-                    //marker_rec,
                     count,
                 } => {
                     let output = todo!();//output_vec.to_persistent(serde_state).await; //FIXXXXX
@@ -199,10 +200,8 @@ impl<T: Clone> PushChan<T> {
         let queue = self.0.queue.lock().await;
         let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const ();
         let buffer = if serde_state.serialised.contains(&ptr) {
-            //Some(vec![])
             None
         } else {
-            //Some(vec![])
             None
         };
         PersistentPushChan {

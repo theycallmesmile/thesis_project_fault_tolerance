@@ -20,18 +20,12 @@ use crate::channel::PushChan;
 //Shared module
 use crate::shared::SharedState;
 use crate::shared::Shared;
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
-pub enum Event<T> {
-    Data(T),
-    Marker,
-    MessageAmount(i32),
-}
+use crate::shared::Event;
 
 #[derive(Debug, Clone)]
 pub enum ProducerState {
     S0 {
-        output_vec: Vec<PushChan<Event<()>>>,
+        output_vec: Vec<PushChan<Event<i32>>>,
         count: i32,
     },
 }
@@ -64,7 +58,6 @@ impl ProducerState {
                         Event::Marker => {
                             //snapshoting
                             println!("start producer snapshotting");
-                            //self.store(&ctx).await;
                             Shared::<()>::store(SharedState::Producer(self.clone()), &ctx).await;
                             println!("done with producer snapshotting");
                             for n in 0..output_vec.len() {
@@ -76,7 +69,7 @@ impl ProducerState {
                         Event::MessageAmount(amount) => {
                             for x in 0..amount {
                                 for output in output_vec {
-                                    output.push(Event::Data(())).await;
+                                    output.push(Event::Data(2)).await;
                                     loc_count = count + 1;
                                 }
                                 for n in 0..output_vec.len() {
@@ -86,7 +79,7 @@ impl ProducerState {
                                             println!("buffer might be full, going trying with next consumer instead.");
                                             println!("amount of elements in buffer: {:?}, out of 15.", &output_vec[n].0.queue);
                                         },
-                                        event = loc_out[n].push(Event::Data(())) => {
+                                        event = loc_out[n].push(Event::Data(1)) => {
                                             loc_count = count + 1;
                                         }
                                     }
