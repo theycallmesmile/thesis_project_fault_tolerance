@@ -174,7 +174,7 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
     //reversing the persistent_task vector for deserialization, the consumers will have buffers, while the producers will have empty buffers.
     persistent_tasks.reverse();
 
-    for persistent_task in persistent_tasks {
+    for persistent_task in persistent_tasks { //Add consumerProducer!!
         match persistent_task {
             PersistentTask::Consumer(state) => match state {
                 PersistentConsumerState::S0 { input, count } => {

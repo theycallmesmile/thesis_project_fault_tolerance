@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time;
@@ -26,287 +27,542 @@ use crate::shared::SharedState;
 #[derive(Debug, Clone)]
 pub enum ConsumerProducerState {
     S0 {
-        //stream 1,
-        //stream 2,
-        //stream 3,
-        //out1,
-        //out2,
-        input_vec: Vec<PullChan<Event<i32>>>,
-        output_vec: Vec<PushChan<Event<i32>>>,
-        //in_out_map: HashMap<Vec<PullChan<Event<i32>>>, Vec<PushChan<Event<i32>>>>,
+        stream0: PullChan<Event<i32>>,
+        stream1: PullChan<Event<i32>>,
+        stream2: PullChan<Event<i32>>,
+        out0: PushChan<Event<i32>>,
+        out1: PushChan<Event<i32>>,
         count: i32,
+        before_marker_queue: Vec<VecDeque<Event<i32>>>,
     },
     S1 {
-        input_vec: Vec<PullChan<Event<i32>>>, //gör till array..?
-        output_vec: Vec<PushChan<Event<i32>>>,
+        stream0: PullChan<Event<i32>>,
+        stream1: PullChan<Event<i32>>,
+        stream2: PullChan<Event<i32>>,
+        out0: PushChan<Event<i32>>,
+        out1: PushChan<Event<i32>>,
         count: i32,
         data: i32,
+        before_marker_queue: Vec<VecDeque<Event<i32>>>,
     },
     S2 {
-        input_vec: Vec<PullChan<Event<i32>>>,
-        output_vec: Vec<PushChan<Event<i32>>>,
+        stream0: PullChan<Event<i32>>,
+        stream1: PullChan<Event<i32>>,
+        stream2: PullChan<Event<i32>>,
+        out0: PushChan<Event<i32>>,
+        out1: PushChan<Event<i32>>,
         count: i32,
+        before_marker_queue: Vec<VecDeque<Event<i32>>>,
     },
 }
 
 impl ConsumerProducerState {
     pub async fn execute_unoptimized(mut self, ctx: Context) {
-        println!("ConsumerProducer unoptimized ON!");
-        let mut interval = time::interval(time::Duration::from_millis(200));
+        println!("ConsumerProducer Unoptimized ON!");
 
         let mut return_state = match &self {
             ConsumerProducerState::S0 {
-                input_vec,
-                output_vec,
-                //in_out_map,
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
                 count,
+                before_marker_queue,
             } => ConsumerProducerState::S0 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
-                //in_out_map: in_out_map.to_owned(),
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
                 count: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
             },
             ConsumerProducerState::S1 {
-                input_vec,
-                output_vec,
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
                 count,
                 data,
+                before_marker_queue,
             } => ConsumerProducerState::S1 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
                 count: count.to_owned(),
                 data: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
             },
             ConsumerProducerState::S2 {
-                input_vec,
-                output_vec,
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
                 count,
+                before_marker_queue,
             } => ConsumerProducerState::S2 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
                 count: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
             },
         };
 
         loop {
             self = match &self {
                 ConsumerProducerState::S0 {
-                    input_vec,
-                    output_vec,
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
                     count,
-                } => {
-                    let mut loc_input_vec = input_vec;
-                    let mut loc_count = count.clone();
-                    let mut loc_out_vec = output_vec;
-                    let mut snapshot_counter: HashSet<usize> = HashSet::new();
-                    println!("ConsumerProducer count: {}", count);
-                    for n in 0..output_vec.len() {
-                        println!("ConsumerProducer queue: {:?}", &loc_out_vec[n].0.queue);
-                    }
-                    for n in 0..input_vec.len() {
-                        if !snapshot_counter.contains(&n)
-                            && !snapshot_counter.len().eq(&input_vec.len())
-                        {
-                            tokio::select! {
-                                _ = interval.tick() => {
-                                    println!("ConsumerProducer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
-                                },
-                                event = input_vec[n].pull() => {
-                                    match event {
-                                        Event::Data(event_data) => {
-                                            let loc_count = count + 1;
-                                            println!("ConsumerProducer count is: {}", loc_count);
-                                            println!("The consumerProducer buffer: {:?}", &input_vec[n].0.queue);
-
-                                            for output in output_vec{ //pushes received message to every consumer (or consumerProducer) operator
-                                                output.push(Event::Data(event_data)).await;
-                                            }
-                                            return_state = ConsumerProducerState::S0 {
-                                                input_vec: input_vec.to_owned(),
-                                                output_vec: output_vec.to_owned(),
-                                                //in_out_map: in_out_map.to_owned(),
-                                                count: loc_count,
-                                            };
-                                        },
-                                        Event::Marker => {
-                                            if snapshot_counter.is_empty(){
-                                                for output in output_vec{ //pushes received marker to every consumer (or consumerProducer) operator
-                                                    output.push(Event::Marker).await;
-                                                }
-                                            }
-                                            //add to the snapshot_count
-                                            snapshot_counter.insert(n);
-
-                                            return_state = ConsumerProducerState::S0 {
-                                                input_vec: input_vec.to_owned(),
-                                                output_vec: output_vec.to_owned(),
-                                                //in_out_map: in_out_map.to_owned(),
-                                                count: count.to_owned(),
-                                            };
-                                        },
-                                        Event::MessageAmount(amount) => {},
-                                    }
-                                },
-                            }
-                        } else if snapshot_counter.len().eq(&input_vec.len()) {
-                            //snapshoting
-                            println!("Start consumer snapshotting");
-                            Shared::<()>::store(SharedState::ConsumerProducer(self.clone()), &ctx)
-                                .await;
-                            println!("Done with consumer snapshotting");
-                            snapshot_counter.clear();
-                        }
-                    }
-                    return_state.clone()
-                }
-                ConsumerProducerState::S1 {
-                    input_vec,
-                    output_vec,
-                    count,
-                    data,
-                } => ConsumerProducerState::S1 {
-                    input_vec: input_vec.to_owned(),
-                    output_vec: output_vec.to_owned(),
-                    count: count.to_owned(),
-                    data: data.to_owned(),
-                },
-                ConsumerProducerState::S2 {
-                    input_vec,
-                    output_vec,
-                    count,
-                } => todo!(),
-            }
-        }
-    }
-
-    pub async fn execute_optimized(mut self, ctx: Context) {
-        println!("ConsumerProducer optimized ON!");
-        let mut interval = time::interval(time::Duration::from_millis(200));
-
-        let mut return_state = match &self {
-            ConsumerProducerState::S0 {
-                input_vec,
-                output_vec,
-                //in_out_map,
-                count,
-            } => ConsumerProducerState::S0 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
-                //in_out_map: in_out_map.to_owned(),
-                count: count.to_owned(),
-            },
-            ConsumerProducerState::S1 {
-                input_vec,
-                output_vec,
-                count,
-                data,
-            } => ConsumerProducerState::S1 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
-                count: count.to_owned(),
-                data: count.to_owned(),
-            },
-            ConsumerProducerState::S2 {
-                input_vec,
-                output_vec,
-                count,
-            } => ConsumerProducerState::S2 {
-                input_vec: input_vec.to_owned(),
-                output_vec: output_vec.to_owned(),
-                count: count.to_owned(),
-            },
-        };
-
-        loop {
-            self = match &self {
-                ConsumerProducerState::S0 {
-                    input_vec,
-                    output_vec,
-                    //in_out_map,
-                    count,
+                    before_marker_queue,
                 } => {
                     //state -> s0
-                    let in_event0 = input_vec[0].pull().await;
+                    let mut loc_before_marker_queue = before_marker_queue.clone();
+                    let in_event0 = if !loc_before_marker_queue[0].len().eq(&0){
+                        loc_before_marker_queue[0].pop_back().unwrap()
+                    } else {
+                        stream0.pull().await 
+                    };
                     match in_event0 {
                         Event::Data(event_data_s0) => {
                             //state -> s1
                             ConsumerProducerState::S1 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
+                                stream0: stream0.to_owned(),
+                                stream1: stream1.to_owned(),
+                                stream2: stream2.to_owned(),
+                                out0: out0.to_owned(),
+                                out1: out1.to_owned(),
                                 count: count.clone(),
                                 data: event_data_s0,
+                                before_marker_queue: loc_before_marker_queue,
                             }
                         }
                         Event::Marker => {
+                            //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
+                            //Draining from the remaining input streams until a marker is received.
+                            //The drained messages are stored for snapshotting.
+
+                            let loc_stream1 = drain_buffers(stream1, &mut loc_before_marker_queue).await;
+                            let loc_stream2 = drain_buffers(stream2, &mut loc_before_marker_queue).await;
+                            //snapshot state:
+                            let snapshot_state = ConsumerProducerState::S0 {
+                                stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                stream1: loc_stream1
+                                    .clone()
+                                    .replace_buffer(&mut loc_before_marker_queue[1])
+                                    .await, //is it necessary to clean if before_marker_queue exsists ? Should the messages sent after marker be saved?
+                                stream2: loc_stream2
+                                    .clone()
+                                    .replace_buffer(&mut loc_before_marker_queue[2])
+                                    .await,
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.to_owned(),
+                                before_marker_queue: loc_before_marker_queue,
+                            };
+                            println!("start producer snapshotting");
+                            Shared::<()>::store(
+                                SharedState::ConsumerProducer(snapshot_state.clone()),
+                                &ctx,
+                            )
+                            .await;
+                            println!("done with producer snapshotting");
+
+                            //forward the marker to consumers
+                            println!("SENDING MARKER!");
+                            out0.push(Event::Marker).await;
+                            out1.push(Event::Marker).await;
+
                             //s0
-                            ConsumerProducerState::S0 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
-                                count: count.clone(),
+                            ConsumerProducerState::S0 { //what happens if streams receive new messages leading loc_stream being old and deprecated?
+                                stream0: stream0.to_owned(),
+                                stream1: stream1.to_owned(),
+                                stream2: stream2.to_owned(),
+                                out0: out0.to_owned(),
+                                out1: out1.to_owned(),
+                                count: count.to_owned(),
+                                before_marker_queue: before_marker_queue.clone(),
                             }
                         }
                         Event::MessageAmount(_) => panic!(),
                     }
                 }
                 ConsumerProducerState::S1 {
-                    input_vec,
-                    output_vec,
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
                     count,
                     data,
+                    before_marker_queue,
                 } => {
-                    let in_event1 = input_vec[1].pull().await;
+                    //state -> s1
+                    let mut loc_before_marker_queue = before_marker_queue.clone();
+                    let in_event1 = if !loc_before_marker_queue[1].len().eq(&0){
+                        loc_before_marker_queue[1].pop_back().unwrap()
+                    } else {
+                        stream1.pull().await 
+                    };
+
                     match in_event1 {
                         Event::Data(event_data_s1) => {
-                            output_vec[0]
-                                .push(Event::Data(data.clone() + event_data_s1))
-                                .await;
+                            out0.push(Event::Data(data.clone() + event_data_s1)).await;
                             ConsumerProducerState::S2 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
                                 count: count.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
                             }
                         }
                         Event::Marker => {
-                            //s1
+                            //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
+                            //Draining from the remaining input streams until a marker is received.
+                            //The drained messages are stored for snapshotting.
+
+                            let loc_stream0 = drain_buffers(stream0, &mut loc_before_marker_queue).await;
+                            let loc_stream2 = drain_buffers(stream2, &mut loc_before_marker_queue).await;
+                            //snapshot state:
+                            let snapshot_state = ConsumerProducerState::S0 {
+                                stream0: loc_stream0
+                                .clone()
+                                .replace_buffer(&mut loc_before_marker_queue[0])
+                                .await, //is it necessary to clean if before_marker_queue exsists ? Should the messages sent after marker be saved?
+                                stream1: stream1.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                stream2: loc_stream2
+                                    .clone()
+                                    .replace_buffer(&mut loc_before_marker_queue[2])
+                                    .await,
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.to_owned(),
+                                before_marker_queue: loc_before_marker_queue,
+                            };
+                            println!("start producer snapshotting");
+                            Shared::<()>::store(
+                                SharedState::ConsumerProducer(snapshot_state.clone()),
+                                &ctx,
+                            )
+                            .await;
+                            println!("done with producer snapshotting");
+
+                            //forward the marker to consumers
+                            println!("SENDING MARKER!");
+                            out0.push(Event::Marker).await;
+                            out1.push(Event::Marker).await;
+
+                             //s1
                             ConsumerProducerState::S1 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
-                                count: count.clone(),
+                                stream0: stream0.to_owned(),
+                                stream1: stream1.to_owned(),
+                                stream2: stream2.to_owned(),
+                                out0: out0.to_owned(),
+                                out1: out1.to_owned(),
+                                count: count.to_owned(),
                                 data: data.clone(),
+                                before_marker_queue: before_marker_queue.clone(),
                             }
                         }
                         Event::MessageAmount(_) => panic!(),
                     }
                 }
                 ConsumerProducerState::S2 {
-                    input_vec,
-                    output_vec,
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
                     count,
+                    before_marker_queue,
                 } => {
-                    //s2 Nothing to do with the first and second stream, should not block them during snapshotting
-                    let in_event2 = input_vec[2].pull().await;
+                    //state -> s2
+                    let mut loc_before_marker_queue = before_marker_queue.clone();
+                    let in_event2 = if !loc_before_marker_queue[2].len().eq(&0){
+                        loc_before_marker_queue[2].pop_back().unwrap()
+                    } else {
+                        stream2.pull().await 
+                    };
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            output_vec[1].push(Event::Data(event_data_s2)).await;
+                            out1.push(Event::Data(event_data_s2)).await;
                             ConsumerProducerState::S0 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
                                 count: count.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
                             }
                         }
                         Event::Marker => {
+                            //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
+                            //Draining from the remaining input streams until a marker is received.
+                            //The drained messages are stored for snapshotting.
+
+                            let loc_stream0 = drain_buffers(stream0, &mut loc_before_marker_queue).await;
+                            let loc_stream1 = drain_buffers(stream1, &mut loc_before_marker_queue).await;
+                            //snapshot state:
+                            let snapshot_state = ConsumerProducerState::S0 {
+                                stream0: loc_stream0
+                                .clone()
+                                .replace_buffer(&mut loc_before_marker_queue[0])
+                                .await, //is it necessary to clean if before_marker_queue exsists ? Should the messages sent after marker be saved?
+                                stream1: loc_stream1
+                                .clone()
+                                .replace_buffer(&mut loc_before_marker_queue[1])
+                                .await,
+                                stream2: stream2.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.to_owned(),
+                                before_marker_queue: loc_before_marker_queue,
+                            };
+                            println!("start producer snapshotting");
+                            Shared::<()>::store(
+                                SharedState::ConsumerProducer(snapshot_state.clone()),
+                                &ctx,
+                            )
+                            .await;
+                            println!("done with producer snapshotting");
+
+                            //forward the marker to consumers
+                            println!("SENDING MARKER!");
+                            out0.push(Event::Marker).await;
+                            out1.push(Event::Marker).await;
+
+                             //s2
                             ConsumerProducerState::S2 {
-                                input_vec: input_vec.clone(),
-                                output_vec: output_vec.clone(),
-                                count: count.clone(),
+                                stream0: stream0.to_owned(),
+                                stream1: stream1.to_owned(),
+                                stream2: stream2.to_owned(),
+                                out0: out0.to_owned(),
+                                out1: out1.to_owned(),
+                                count: count.to_owned(),
+                                before_marker_queue: before_marker_queue.clone(),
                             }
-                        }
+                        },
                         Event::MessageAmount(_) => panic!(),
                     }
                 }
             };
         }
     }
+
+    pub async fn execute_optimized(mut self, ctx: Context) {
+        println!("ConsumerProducer optimized ON!");
+
+        let mut return_state = match &self {
+            ConsumerProducerState::S0 {
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
+                count,
+                before_marker_queue,
+            } => ConsumerProducerState::S0 {
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
+                count: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
+            },
+            ConsumerProducerState::S1 {
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
+                count,
+                data,
+                before_marker_queue,
+            } => ConsumerProducerState::S1 {
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
+                count: count.to_owned(),
+                data: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
+            },
+            ConsumerProducerState::S2 {
+                stream0,
+                stream1,
+                stream2,
+                out0,
+                out1,
+                count,
+                before_marker_queue,
+            } => ConsumerProducerState::S2 {
+                stream0: stream0.to_owned(),
+                stream1: stream1.to_owned(),
+                stream2: stream2.to_owned(),
+                out0: out0.to_owned(),
+                out1: out1.to_owned(),
+                count: count.to_owned(),
+                before_marker_queue: before_marker_queue.to_owned(),
+            },
+        };
+
+        loop {
+            self = match &self {
+                ConsumerProducerState::S0 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                    before_marker_queue,
+                } => {
+                    //state -> s0
+                    let in_event0 = stream0.pull().await;
+                    match in_event0 {
+                        Event::Data(event_data_s0) => {
+                            //state -> s1
+                            ConsumerProducerState::S1 {
+                                stream0: stream0.to_owned(),
+                                stream1: stream1.to_owned(),
+                                stream2: stream2.to_owned(),
+                                out0: out0.to_owned(),
+                                out1: out1.to_owned(),
+                                count: count.clone(),
+                                data: event_data_s0,
+                                before_marker_queue: before_marker_queue.to_owned(),
+                            }
+                        }
+                        Event::Marker => {
+                            //Fix:marker should drain the other stream, but it will block stream 2 while draining
+                            //implement draining
+                            //implement snapshotting
+                            //s0
+                            ConsumerProducerState::S0 {
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
+                            }
+                        }
+                        Event::MessageAmount(_) => panic!(),
+                    }
+                }
+                ConsumerProducerState::S1 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                    data,
+                    before_marker_queue,
+                } => {
+                    let in_event1 = stream1.pull().await;
+                    match in_event1 {
+                        Event::Data(event_data_s1) => {
+                            out0.push(Event::Data(data.clone() + event_data_s1)).await;
+                            ConsumerProducerState::S2 {
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
+                            }
+                        }
+                        Event::Marker => {
+                            //s1
+                            ConsumerProducerState::S1 {
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.clone(),
+                                data: data.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
+                            }
+                        }
+                        Event::MessageAmount(_) => panic!(),
+                    }
+                }
+                ConsumerProducerState::S2 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                    before_marker_queue,
+                } => {
+                    //s2 Nothing to do with the first and second stream, should not block them during snapshotting
+                    let in_event2 = stream2.pull().await;
+                    match in_event2 {
+                        Event::Data(event_data_s2) => {
+                            out1.push(Event::Data(event_data_s2)).await;
+                            ConsumerProducerState::S0 {
+                                stream0: stream0.clone(),
+                                stream1: stream1.clone(),
+                                stream2: stream2.clone(),
+                                out0: out0.clone(),
+                                out1: out1.clone(),
+                                count: count.clone(),
+                                before_marker_queue: before_marker_queue.to_owned(),
+                            }
+                        }
+                        Event::Marker => ConsumerProducerState::S2 {
+                            stream0: stream0.clone(),
+                            stream1: stream1.clone(),
+                            stream2: stream2.clone(),
+                            out0: out0.clone(),
+                            out1: out1.clone(),
+                            count: count.clone(),
+                            before_marker_queue: before_marker_queue.to_owned(),
+                        },
+                        Event::MessageAmount(_) => panic!(),
+                    }
+                }
+            };
+        }
+    }
+}
+
+pub async fn drain_buffers(stream: &PullChan<Event<i32>>, before_marker_queue: &mut Vec<VecDeque<Event<i32>>>) -> PullChan<Event<i32>>{
+    loop {
+        let in_event = stream.pull().await;
+        match in_event {
+            Event::Data(event_data) => {
+                before_marker_queue[0]
+                    .push_front(Event::Data(event_data));
+            }
+            Event::Marker => {
+                break;
+            }
+            Event::MessageAmount(_) => panic!(),
+        }
+    }
+    stream.clone()
 }
 
 /*pub async fn merge(

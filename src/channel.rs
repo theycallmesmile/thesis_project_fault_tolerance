@@ -75,6 +75,17 @@ impl<T> PullChan<T> {
             Self(Arc::from_raw(uid as *const _))
         }
     }
+    pub async fn clear_buffer(self) -> Self{
+        self.0.queue.lock().await.clear();
+        self
+    }
+    pub async fn replace_buffer(self, new_queue: &mut VecDeque<T>) -> Self{
+        let mut temp_self = self.clone().clear_buffer().await;
+        while new_queue.len() != 0 {
+            temp_self.0.queue.lock().await.push_front(new_queue.pop_front().unwrap());
+        }
+        temp_self
+    }
 }
 
 impl<T> PushChan<T> {
