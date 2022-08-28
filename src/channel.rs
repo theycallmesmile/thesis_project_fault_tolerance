@@ -11,7 +11,6 @@ use serde::Serialize;
 //shared module
 use crate::shared::Event;
 
-
 pub const CAPACITY: usize = 15;
 
 /// An async FIFO SPSC channel.
@@ -20,16 +19,19 @@ pub struct Chan<T> {
     pub queue: Mutex<VecDeque<T>>,
     pullvar: Condvar,
     pushvar: Condvar,
+    log: Mutex<VecDeque<T>>,
 }
 
 impl<T> Chan<T> {
     fn new(cap: usize) -> Self {
         let chan = VecDeque::with_capacity(cap);
+        let chan_log = VecDeque::with_capacity(cap);
         //println!("Created channel with capacity {}", chan.capacity());
         Self {
             queue: Mutex::new(chan),
             pullvar: Condvar::new(),
             pushvar: Condvar::new(),
+            log: Mutex::new(chan_log),
         }
     }
     fn load(cap: usize, ch: Chan<T>) -> Self { //To be used when loading the checkpoints
@@ -38,10 +40,12 @@ impl<T> Chan<T> {
             queue: ch.queue,
             pullvar: ch.pullvar,
             pushvar: ch.pushvar,
+            log: ch.log,
         }
     }
     fn from_vec(buf: Vec<T>) -> Self {
-        Self { queue: Mutex::new(buf.into_iter().collect()), pullvar: Condvar::new(), pushvar: Condvar::new() }
+        let chan_log = VecDeque::with_capacity(CAPACITY);
+        Self { queue: Mutex::new(buf.into_iter().collect()), pullvar: Condvar::new(), pushvar: Condvar::new(), log: Mutex::new(chan_log)}
     }
 }
 
@@ -78,6 +82,9 @@ impl<T> PullChan<T> {
     pub async fn clear_buffer(self) -> Self{
         self.0.queue.lock().await.clear();
         self
+    }
+    pub async fn log_length_check(self) -> bool{
+        self.0.log.lock().await.is_empty()
     }
     pub async fn replace_buffer(self, new_queue: &mut VecDeque<T>) -> Self{
         let mut temp_self = self.clone().clear_buffer().await;
@@ -216,6 +223,19 @@ impl<T:  std::fmt::Debug> PullChan<T> {
         //println!("****Pulling done");
         data
     }
+
+    pub async fn pull_log(&self) -> T{
+        let mut log = self.0.log.lock().await;
+        let data = log.pop_front().unwrap();
+        drop(log);
+        data
+    }
+    pub async fn push_log(&self, data: T){
+        let mut log = self.0.log.lock().await;
+        log.push_back(data);
+        drop(log);
+    }
+
 
 }
 

@@ -283,7 +283,6 @@ pub async fn spawn_operators(
                     out0: out_chan[0].clone(),
                     out1: out_chan[1].clone(),
                     count: 0,
-                    before_marker_queue: vec![VecDeque::new(), VecDeque::new(), VecDeque::new()],
                 };
                 let cons_prod_ctx = Context {
                     marker_manager_recv: None,
