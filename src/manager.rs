@@ -99,7 +99,7 @@ pub enum OperatorChannels {
 impl Task {
     fn spawn(self, ctx: Context) -> async_std::task::JoinHandle<()> {
         match self {
-            Task::Consumer(state) => async_std::task::spawn(state.execute(ctx)),
+            Task::Consumer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
             Task::Producer(state) => async_std::task::spawn(state.execute(ctx)),
             Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
         }
@@ -255,11 +255,9 @@ pub async fn spawn_operators(
                 marker_vec_counter += 1;
             }
             Operators::Consumer(_) => {
+                let in_chan =  operator_channel_to_pull_vec(operator_state_chan.get(operator.0).unwrap()).await;
                 let cons_state = ConsumerState::S0 {
-                    input_vec: operator_channel_to_pull_vec(
-                        operator_state_chan.get(operator.0).unwrap(),
-                    )
-                    .await,
+                    stream0: in_chan[0].to_owned(),
                     count: 0,
                 };
                 let cons_ctx = Context {
@@ -277,11 +275,11 @@ pub async fn spawn_operators(
                     operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
                         .await;
                 let cons_prod_state = ConsumerProducerState::S0 {
-                    stream0: in_chan[0].clone(),
-                    stream1: in_chan[1].clone(),
-                    stream2: in_chan[2].clone(),
-                    out0: out_chan[0].clone(),
-                    out1: out_chan[1].clone(),
+                    stream0: in_chan[0].to_owned(),
+                    stream1: in_chan[1].to_owned(),
+                    stream2: in_chan[2].to_owned(),
+                    out0: out_chan[0].to_owned(),
+                    out1: out_chan[1].to_owned(),
                     count: 0,
                 };
                 let cons_prod_ctx = Context {

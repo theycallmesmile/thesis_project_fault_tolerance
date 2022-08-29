@@ -89,7 +89,7 @@ impl Task {
                 }
             },
             Task::Consumer(state) => match state { //never needed?
-                ConsumerState::S0 { input_vec, count } => todo!()/*ConsumerState::S0 { input, count } => {
+                ConsumerState::S0 { stream0, count } => todo!()/*ConsumerState::S0 { input, count } => {
                     let input = input.to_persistent(serde_state).await;
                     PersistentTask::Consumer(PersistentConsumerState::S0 { input, count })
                 }*/

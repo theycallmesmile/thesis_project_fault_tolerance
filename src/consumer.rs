@@ -1,7 +1,7 @@
 use tokio::sync::oneshot;
 
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
 
@@ -20,80 +20,57 @@ use crate::channel::channel;
 use crate::channel::PullChan;
 use crate::channel::PushChan;
 
-
 //Shared module
-use crate::shared::SharedState;
-use crate::shared::Shared;
 use crate::shared::Event;
+use crate::shared::Shared;
+use crate::shared::SharedState;
 
 #[derive(Debug, Clone)]
 pub enum ConsumerState {
     S0 {
-        input_vec: Vec<PullChan<Event<i32>>>,
+        stream0: PullChan<Event<i32>>,
         count: i32,
     },
 }
 
 impl ConsumerState {
-    pub async fn execute(mut self, ctx: Context) {
+    pub async fn execute_unoptimized(mut self, ctx: Context) {
         println!("consumer ON!");
-        let mut interval = time::interval(time::Duration::from_millis(200));
-        let mut snapshot_counter:HashSet<usize> = HashSet::new();
-
-        task::sleep(Duration::from_secs(2)).await;
-        let mut return_state = match &self {
-            ConsumerState::S0 { input_vec, count } => ConsumerState::S0 {
-                input_vec: input_vec.to_owned(),
-                count: count.to_owned(),
-            },
-        };
-
         loop {
-            self = match &self {
-                ConsumerState::S0 { input_vec, count } => {
-                    for n in 0..input_vec.len() {
-                        if !snapshot_counter.contains(&n) && !snapshot_counter.len().eq(&input_vec.len()){
-                            tokio::select! {
-                                _ = interval.tick() => {
-                                    println!("Consumer count is: {}, Buffer empty for: {:?}", count, &input_vec[n]);
+            self = match self {
+                ConsumerState::S0 { stream0, count } => {
+                    let in_event0 = stream0.pull().await;
 
-                                },
-                                event = input_vec[n].pull() => {
-                                    match event {
-                                        Event::Data(data) => {
-                                            let loc_count = count + 1;
-                                            println!("Consumer count is: {}", count);
-                                            println!("The consumer buffer: {:?}", &input_vec[n].0.queue);
+                    match in_event0 {
+                        Event::Data(event_data_s0) => {
+                            let loc_count = count + 1;
+                            println!("The consumer received: {}", event_data_s0);
+                            ConsumerState::S0 { stream0, count: loc_count }
+                        }
+                        Event::Marker => {
+                            //draining not needed since only one in_stream
 
-                                            return_state = ConsumerState::S0 {
-                                                input_vec: input_vec.to_owned(),
-                                                count: loc_count,
-                                            };
-                                        },
-                                        Event::Marker => {
-                                            //add to the snapshot_count
-                                            snapshot_counter.insert(n);
+                            let snapshot_state = ConsumerState::S0 {
+                                stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                count,
+                            };
 
-                                            return_state = ConsumerState::S0 {
-                                                input_vec: input_vec.to_owned(),
-                                                count: count.to_owned(),
-                                            };
-                                        },
-                                        Event::MessageAmount(amount) => {},
-                                    }
-                                },
-                            }
-                        } else if snapshot_counter.len().eq(&input_vec.len()){
-                            //snapshoting
-                            println!("Start consumer snapshotting");
-                            Shared::<()>::store(SharedState::Consumer(self.clone()), &ctx).await;
-                            println!("Done with consumer snapshotting");
-                            snapshot_counter.clear();
+                            println!("start Consumer snapshotting");
+                            Shared::<()>::store(
+                                SharedState::Consumer(snapshot_state.clone()),
+                                &ctx,
+                            )
+                            .await;
+                            println!("done with Consumer snapshotting");
+
+                            ConsumerState::S0 { stream0, count }
+                        }
+                        Event::MessageAmount(_) => {
+                            panic!()
                         }
                     }
-                    return_state.clone()
                 }
-            }
+            };
         }
     }
 }

@@ -101,13 +101,13 @@ impl ConsumerProducerState {
                                 out1: out1.clone(),
                                 count,
                             };
-                            println!("start producer snapshotting");
+                            println!("start ConsumerProducer snapshotting");
                             Shared::<()>::store(
                                 SharedState::ConsumerProducer(snapshot_state.clone()),
                                 &ctx,
                             )
                             .await;
-                            println!("done with producer snapshotting");
+                            println!("done with ConsumerProducer snapshotting");
 
                             //forward the marker to consumers
                             println!("SENDING MARKER!");
