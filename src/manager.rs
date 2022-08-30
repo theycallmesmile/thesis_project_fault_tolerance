@@ -100,7 +100,7 @@ impl Task {
     fn spawn(self, ctx: Context) -> async_std::task::JoinHandle<()> {
         match self {
             Task::Consumer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
-            Task::Producer(state) => async_std::task::spawn(state.execute(ctx)),
+            Task::Producer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
             Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
         }
     }
@@ -128,13 +128,13 @@ impl Manager {
 
         //Giving permission to sourceProducers to create and send X amount of messages to connected operators.
         for prod_chan in &self.marker_chan_vec {
-            prod_chan.0.push(Event::MessageAmount(10));
+            prod_chan.0.push(Event::MessageAmount(20)).await;
         }
-
         //Sleeping before sending a marker to the source-producers
-        //task::sleep(Duration::from_secs(2)).await;
+        task::sleep(Duration::from_secs(2)).await;
         //loop to send markers to source-producers
         //self.send_markers().await;
+        println!("Resuming!");
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -241,7 +241,7 @@ pub async fn spawn_operators(
                     operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
                         .await;
                 let prod_state = ProducerState::S0 {
-                    output_vec: chan.clone(),
+                    out0: chan[0].to_owned(),
                     count: 0,
                 };
                 let prod_ctx = Context {
@@ -291,9 +291,6 @@ pub async fn spawn_operators(
             }
         }
     }
-
-    loop { //REMOVE THIS, used for testing
-    }
     task_op_spawn_vec
 }
 
@@ -316,6 +313,9 @@ async fn init_operator_push_channels(
     operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
 ) {
+    println!("operator_connections: {:#?}", operator_connections);
+    println!("operator_channel: {:#?}",operator_channel);
+    println!("operator_state_chan: {:#?}",operator_state_chan);
     for connection in operator_connections {
         //Producer/ConsumerProducer operator_state_chan is given X amount of push for each connected channel in graph.
         let key_chan = operator_channel.get(connection.0).unwrap().clone();
@@ -474,7 +474,10 @@ pub fn manager() {
         vec![Operators::ConsumerProducer(1)],
     );
     operator_connections.insert(Operators::ConsumerProducer(1), vec![Operators::Consumer(1)]);
-    operator_connections.insert(Operators::ConsumerProducer(1), vec![Operators::Consumer(2)]);
+    operator_connections.entry(Operators::ConsumerProducer(1)).and_modify(|e| { e.push(Operators::Consumer(2)) }).or_insert(vec![Operators::Consumer(2)]);
+
+
+    println!("TEST OPERATOR_CONNECTIONS: {:?}", operator_connections);
 
     //push: from the operator to the manager(fe, state), filling the buffer
     //pull: manager can pull from the buffer

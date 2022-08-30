@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use std::sync::Arc;
 
 //Manager module
-use crate::manager::Context;
+use crate::manager::{Context, self};
 use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
@@ -25,75 +25,58 @@ use crate::shared::Event;
 #[derive(Debug, Clone)]
 pub enum ProducerState {
     S0 {
-        output_vec: Vec<PushChan<Event<i32>>>,
+        out0: PushChan<Event<i32>>,
         count: i32,
     },
 }
 
 impl ProducerState {
-    pub async fn execute(mut self, ctx: Context) {
+    pub async fn execute_unoptimized(mut self, ctx: Context) {
         println!("producer ON!");
-        let mut interval = time::interval(time::Duration::from_millis(200));
-
-        let mut return_state = match &self {
-            ProducerState::S0 { output_vec, count } => ProducerState::S0 {
-                output_vec: output_vec.to_owned(),
-                count: count.to_owned(),
-            },
-        };
-
         loop {
-            self = match &self {
-                ProducerState::S0 { output_vec, count } => {
-                    let mut loc_count = count.clone();
-                    let mut loc_out = output_vec;
-                    println!("producer count: {}", count);
-                    for n in 0..output_vec.len() {
-                        println!("producer queue: {:?}", &loc_out[n].0.queue);
-                    }
-                    //snapshot and send marker to consumer
-                    let msg = ctx.marker_manager_recv.as_ref().unwrap().pull().await;
-                    match msg {
-                        Event::Data(_) => {}
+            self = match self {
+                ProducerState::S0 { out0, count } => {
+                    println!("state s0");
+                    let manager_event = ctx.marker_manager_recv.as_ref().unwrap().pull().await;
+                    println!("manager_event: {:?}", manager_event);
+                    match manager_event {
+                        Event::Data(_) => {panic!()}
                         Event::Marker => {
                             //snapshoting
+                            let snapshot_state = ProducerState::S0 {
+                                out0: out0.clone(),
+                                count,
+                            };
+
                             println!("start producer snapshotting");
-                            Shared::<()>::store(SharedState::Producer(self.clone()), &ctx).await;
+                            Shared::<()>::store(SharedState::Producer(snapshot_state), &ctx).await;
                             println!("done with producer snapshotting");
-                            for n in 0..output_vec.len() {
-                                //forward the marker to consumers
-                                println!("SENDING MARKER!");
-                                loc_out[n].push(Event::Marker).await;
+                            //forward the marker to consumers
+                            println!("SENDING MARKER!");
+                            out0.push(Event::Marker).await;
+
+                            ProducerState::S0 {
+                                out0,
+                                count,
                             }
                         }
                         Event::MessageAmount(amount) => {
+                            println!("Received request of amount: {}", amount);
+                            let mut loc_count = count; 
                             for x in 0..amount {
-                                for output in output_vec {
-                                    output.push(Event::Data(2)).await;
-                                    loc_count = count + 1;
-                                }
-                                for n in 0..output_vec.len() {
-                                    tokio::select! {
-                                        //send data to consumer
-                                        _ = interval.tick() => {
-                                            println!("buffer might be full, going trying with next consumer instead.");
-                                            println!("amount of elements in buffer: {:?}, out of 15.", &output_vec[n].0.queue);
-                                        },
-                                        event = loc_out[n].push(Event::Data(1)) => {
-                                            loc_count = count + 1;
-                                        }
-                                    }
-                                }
+                                out0.push(Event::Data(2)).await;
+                                loc_count += 1;
+                            }
+                            ProducerState::S0 {
+                                out0,
+                                count,
                             }
                         }
-                    }
-
-                    ProducerState::S0 {
-                        output_vec: output_vec.to_owned(),
-                        count: loc_count,
                     }
                 }
             }
         }
     }
+
+    
 }

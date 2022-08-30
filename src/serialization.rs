@@ -49,9 +49,9 @@ pub enum PersistentTask {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum PersistentProducerState {
+pub enum PersistentProducerState { //todo: add all the states
     S0 {
-        output: PersistentPushChan<Event<i32>>,
+        output0: PersistentPushChan<Event<i32>>,
         count: i32,
     },
 }
@@ -59,7 +59,7 @@ pub enum PersistentProducerState {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentConsumerState {
     S0 {
-        input: PersistentPullChan<Event<i32>>,
+        input0: PersistentPullChan<Event<i32>>,
         count: i32,
     },
 }
@@ -81,18 +81,18 @@ impl Task {
         match self {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
-                    output_vec,
+                    out0,
                     count,
                 } => {
-                    let output = todo!();//output_vec.to_persistent(serde_state).await; //FIXXXXX
-                    PersistentTask::Producer(PersistentProducerState::S0 { output, count })
+                    let loc_output0 = out0.to_persistent(serde_state).await;
+                    PersistentTask::Producer(PersistentProducerState::S0 { output0: loc_output0, count })
                 }
             },
             Task::Consumer(state) => match state { //never needed?
-                ConsumerState::S0 { stream0, count } => todo!()/*ConsumerState::S0 { input, count } => {
-                    let input = input.to_persistent(serde_state).await;
-                    PersistentTask::Consumer(PersistentConsumerState::S0 { input, count })
-                }*/
+                ConsumerState::S0 { stream0, count } => {
+                    let loc_input0 = stream0.to_persistent(serde_state).await;
+                    PersistentTask::Consumer(PersistentConsumerState::S0 { input0: loc_input0, count })
+                }
             },
             Task::ConsumerProducer(_) => todo!(),
         }
@@ -174,19 +174,19 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
     //reversing the persistent_task vector for deserialization, the consumers will have buffers, while the producers will have empty buffers.
     persistent_tasks.reverse();
 
-    for persistent_task in persistent_tasks { //Add consumerProducer!!
+    for persistent_task in persistent_tasks { //Todo: Add consumerProducer!!
         match persistent_task {
             PersistentTask::Consumer(state) => match state {
-                PersistentConsumerState::S0 { input, count } => {
+                PersistentConsumerState::S0 { input0, count } => {
                     //look up in the hashtable to find value of ptr and check if the value is empty vec
-                    let input = PullChan::from_persistent(input, ptr_vec_hashmap);
-                    todo!()//tasks.push(Task::Consumer(ConsumerState::S0 { input, count }));
+                    let input = PullChan::from_persistent(input0, ptr_vec_hashmap);
+                    tasks.push(Task::Consumer(ConsumerState::S0 { stream0: input, count })); //todo: match the state!
                 }
             },
             PersistentTask::Producer(state) => match state {
-                PersistentProducerState::S0 { output, count } => {
-                    let output = PushChan::from_persistent(output, ptr_vec_hashmap);
-                    tasks.push(Task::Producer(ProducerState::S0 { output_vec:vec![output], count })); //FIX!!! output is not correct, before: { output_vec:output, count }));
+                PersistentProducerState::S0 { output0, count } => {
+                    let loc_output0 = PushChan::from_persistent(output0, ptr_vec_hashmap);
+                    tasks.push(Task::Producer(ProducerState::S0 { out0: loc_output0, count })); //todo: match the state!
                 }
             },
         }
