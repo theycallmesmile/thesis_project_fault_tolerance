@@ -50,9 +50,9 @@ impl ProducerState {
 
                             println!("start producer snapshotting");
                             Shared::<()>::store(SharedState::Producer(snapshot_state), &ctx).await;
-                            println!("done with producer snapshotting");
+                            println!("Done with producer snapshotting");
                             //forward the marker to consumers
-                            println!("SENDING MARKER!");
+                            println!("Producer - SENDING MARKER!");
                             out0.push(Event::Marker).await;
 
                             ProducerState::S0 {

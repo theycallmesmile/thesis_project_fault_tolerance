@@ -19,7 +19,7 @@ pub struct Chan<T> {
     pub queue: Mutex<VecDeque<T>>,
     pullvar: Condvar,
     pushvar: Condvar,
-    log: Mutex<VecDeque<T>>,
+    pub log: Mutex<VecDeque<T>>,
 }
 
 impl<T> Chan<T> {

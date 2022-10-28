@@ -90,8 +90,11 @@ impl ConsumerProducerState {
                             //Draining from the remaining input streams until a marker is received.
                             //The drained messages are stored for snapshotting.
 
+                            println!("Consumer-producer: starting draining!");
                             let loc_stream1 = drain_buffers(&stream1).await;
                             let loc_stream2 = drain_buffers(&stream2).await;
+                            println!("Consumer-Producer: Done with draining");
+                            println!("LOG CHECK0: {:?}",loc_stream2);
                             //snapshot state:
                             let snapshot_state = ConsumerProducerState::S0 {
                                 stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
@@ -162,6 +165,7 @@ impl ConsumerProducerState {
 
                             let loc_stream0 = drain_buffers(&stream0).await;
                             let loc_stream2 = drain_buffers(&stream2).await;
+                            println!("LOG CHECK0: {:?}",loc_stream2);
                             //snapshot state:
                             let snapshot_state = ConsumerProducerState::S1 {
                                 stream0: loc_stream0, //is it necessary to clean if log exsists ? Should the messages sent after marker be saved?
@@ -199,7 +203,7 @@ impl ConsumerProducerState {
                         Event::MessageAmount(_) => panic!(),
                     }
                 }
-                ConsumerProducerState::S2 {
+                ConsumerProducerState::S2 { 
                     stream0,
                     stream1,
                     stream2,
@@ -606,7 +610,7 @@ pub async fn drain_buffers(stream: &PullChan<Event<i32>>) -> PullChan<Event<i32>
         let in_event = stream.pull().await;
         match in_event {
             Event::Data(event_data) => {
-                stream.push_log(Event::Data(event_data)); //change to just event_data, since it will never have a marker..?
+                stream.push_log(Event::Data(event_data)).await;
             }
             Event::Marker => {
                 break;

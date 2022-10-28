@@ -165,7 +165,7 @@ impl Manager {
                             //persistent_task.push_to_vec(&mut serialize_task_vec).await;// <-- remove and change to persistent_task_vec?
                             promise.send(1);
                             snapshot_timeout_counter = 0;
-                            //operator_counter +=1;
+                            operator_counter +=1;
                             println!("operator_amount: {}, operator_counter: {}",&operator_amount,&operator_counter);
                             if (operator_amount == operator_counter){ //change operator_counter TO -> serde_state.persistent_task_vec.len()?
                                 println!("CHECKPOINTING!!");
@@ -177,7 +177,6 @@ impl Manager {
                 },
             }
         }
-        println!("Dobby is a free elf now!");
     }
     async fn send_markers(&self) {
         //sending markers to the source-producers
