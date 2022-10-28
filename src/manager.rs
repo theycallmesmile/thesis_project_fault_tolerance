@@ -110,7 +110,6 @@ impl Manager {
     async fn run(mut self, operator_connections: HashMap<Operators, Vec<Operators>>) {
         let mut interval = time::interval(time::Duration::from_millis(100));
         let mut snapshot_timeout_counter = 0;
-        let mut snapshot_resend_chance = true;
 
         //creating hashmap and hashset
         let mut serde_state = SerdeState {
@@ -126,22 +125,16 @@ impl Manager {
         let mut operator_amount = operator_spawn_vec.len();
         let mut operator_counter = 0;
 
-        //Giving permission to sourceProducers to create and send X amount of messages to connected operators.
-        for prod_chan in &self.marker_chan_vec {
-            prod_chan.0.push(Event::MessageAmount(20)).await;
-        }
-
-
-
-        //Sleeping before sending a marker to the source-producers
-        task::sleep(Duration::from_secs(2)).await;
-        //loop to send markers to source-producers
-        //self.send_markers().await;
-        println!("Resuming!");
+        //Giving permission for message creation in producers
+        self.send_messages(20).await;
+        //Sending markers to the producers
+        self.send_markers().await;
+        
+        
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if snapshot_timeout_counter == 3000 && snapshot_resend_chance == true { //no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
+                    if snapshot_timeout_counter == 300 { //no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
                         println!("One or more operator does not respond, rollbacking to the latest checkpoint!");
                         while let Some(operator) = operator_spawn_vec.pop() {
                             operator.cancel().await;
@@ -157,18 +150,7 @@ impl Manager {
                         //resetting the values
                         operator_amount = operator_spawn_vec.len();
                         operator_counter = 0;
-
-                        //self.send_markers().await; //sending new markers ////no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
                         break;
-
-                    } else if snapshot_timeout_counter == 3000 && snapshot_resend_chance == false { //TODO: What if manager receives the snapshot afterwards, resulting in duplication..? 
-                        println!("At least of the operators does not respond, resending markers!");//This else,if should not excist since the operators are making sure that a prome is received or is blocked until it receives it.
-                        // Thus leading to a failure if its either blocked(deadlock fe.) or not responsive or havent been able to send marker to downstream operators
-                        snapshot_timeout_counter = 0;
-                        snapshot_resend_chance = true;
-                        serde_state.persistent_task_vec.clear();
-                        operator_counter = 0;
-                        //self.send_markers().await;
                     }
                     else {
                         snapshot_timeout_counter += 1;
@@ -181,13 +163,11 @@ impl Manager {
 
                             serde_state.persistent_task_vec.push(persistent_task);
                             //persistent_task.push_to_vec(&mut serialize_task_vec).await;// <-- remove and change to persistent_task_vec?
-                            //task::sleep(Duration::from_secs(2)).await;
                             promise.send(1);
                             snapshot_timeout_counter = 0;
-                            snapshot_resend_chance = false;
                             //operator_counter +=1;
                             println!("operator_amount: {}, operator_counter: {}",&operator_amount,&operator_counter);
-                            if (operator_amount == operator_counter){
+                            if (operator_amount == operator_counter){ //change operator_counter TO -> serde_state.persistent_task_vec.len()?
                                 println!("CHECKPOINTING!!");
                                 serialize_state(&mut serde_state).await;
                                 break;
@@ -205,6 +185,13 @@ impl Manager {
             marker_chan.0.push(Event::Marker).await;
         }
         println!("Done sending the markers to source-producers.");
+    }
+    async fn send_messages(&self, amount: i32) {
+        //Giving permission to Producers to create and send X amount of messages to connected operators.
+        for prod_chan in &self.marker_chan_vec {
+            prod_chan.0.push(Event::MessageAmount(amount)).await;
+        }
+        println!("Done sending the permission to produce messages all producers.");
     }
 }
 
