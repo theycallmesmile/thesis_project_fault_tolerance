@@ -357,10 +357,9 @@ impl ConsumerProducerState {
                             //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
                             //Draining from the remaining input streams until a marker is received.
                             //The drained messages are stored for snapshotting.
-
                             let loc_stream1 = drain_buffers(&stream1).await;
                             
-                            loop {
+                            /*loop {
                                 match stream2.pull().await {
                                     Event::Data(event_data_s2) => {
                                         out1.push(Event::Data(event_data_s2)).await;
@@ -370,11 +369,11 @@ impl ConsumerProducerState {
                                     },
                                     Event::MessageAmount(_) => panic!(),
                                 }
-                            }
+                            }*/
 
 
                             //snapshot state:
-                            let snapshot_state = ConsumerProducerState::S0 {
+                            let snapshot_state = ConsumerProducerState::S0 {//todo: dont need to clear buffer, the manager will only save the logs in the channels. 
                                 stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
                                 stream1: loc_stream1, //Should the messages sent after marker be saved?
                                 stream2: stream2.clone().clear_buffer().await,
@@ -556,14 +555,15 @@ impl ConsumerProducerState {
                                     Event::Marker => {
                                         let loc_stream0 = drain_buffers(&stream0).await;
 
-                                        //snapshot state:
-                                        let snapshot_state = ConsumerProducerState::S2 {
+                                        //snapshot state: //maybe ::S1 instead?
+                                        let snapshot_state = ConsumerProducerState::S2 {//TODO: BUG IN THE STATE, NEED TO SAVE event_data incase it has value in it
                                             stream0: loc_stream0,
                                             stream1: stream1.clone().clear_buffer().await,
                                             stream2: stream2.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
                                             out0: out0.clone(),
                                             out1: out1.clone(),
                                             count,
+                                            //might need event_data: event_data.clone(), here 
                                         };
                                         println!("start producer snapshotting");
                                         Shared::<()>::store(

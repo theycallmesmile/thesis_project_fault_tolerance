@@ -130,6 +130,9 @@ impl Manager {
         for prod_chan in &self.marker_chan_vec {
             prod_chan.0.push(Event::MessageAmount(20)).await;
         }
+
+
+
         //Sleeping before sending a marker to the source-producers
         task::sleep(Duration::from_secs(2)).await;
         //loop to send markers to source-producers
@@ -138,7 +141,7 @@ impl Manager {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if snapshot_timeout_counter == 3000 && snapshot_resend_chance == true {
+                    if snapshot_timeout_counter == 3000 && snapshot_resend_chance == true { //no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
                         println!("One or more operator does not respond, rollbacking to the latest checkpoint!");
                         while let Some(operator) = operator_spawn_vec.pop() {
                             operator.cancel().await;
@@ -155,11 +158,12 @@ impl Manager {
                         operator_amount = operator_spawn_vec.len();
                         operator_counter = 0;
 
-                        //self.send_markers().await; //sending new markers
+                        //self.send_markers().await; //sending new markers ////no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
                         break;
 
-                    } else if snapshot_timeout_counter == 3000 && snapshot_resend_chance == false {
-                        println!("At least of the operators does not respond, resending markers!");
+                    } else if snapshot_timeout_counter == 3000 && snapshot_resend_chance == false { //TODO: What if manager receives the snapshot afterwards, resulting in duplication..? 
+                        println!("At least of the operators does not respond, resending markers!");//This else,if should not excist since the operators are making sure that a prome is received or is blocked until it receives it.
+                        // Thus leading to a failure if its either blocked(deadlock fe.) or not responsive or havent been able to send marker to downstream operators
                         snapshot_timeout_counter = 0;
                         snapshot_resend_chance = true;
                         serde_state.persistent_task_vec.clear();
