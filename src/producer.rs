@@ -36,7 +36,6 @@ impl ProducerState {
         loop {
             self = match self {
                 ProducerState::S0 { out0, count } => {
-                    println!("state s0");
                     let manager_event = ctx.marker_manager_recv.as_ref().unwrap().pull().await;
                     println!("manager_event: {:?}", manager_event);
                     match manager_event {

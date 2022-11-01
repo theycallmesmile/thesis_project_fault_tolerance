@@ -134,23 +134,28 @@ impl Manager {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if snapshot_timeout_counter == 300 { //no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
+                    if snapshot_timeout_counter >= 300 { //no reason to checkpoint after a rollback, it will be similar to the rollbacked checkpoint.
                         println!("One or more operator does not respond, rollbacking to the latest checkpoint!");
                         while let Some(operator) = operator_spawn_vec.pop() {
                             operator.cancel().await;
                         }
 
-                        task::sleep(Duration::from_secs(2)).await;
+                        //task::sleep(Duration::from_secs(2)).await;
                         serde_state.persistent_task_vec.clear(); //clearing the vector
                         let loaded_checkpoint = load_persistent().await; //the json string
+                        println!("Loaded checkpoint: {:?}",loaded_checkpoint);
                         serialize_task_vec = load_deserialize(loaded_checkpoint, &mut serde_state.deserialised).await; //deserialized checkpoint vec
-
+                        println!("Loaded serialize_task_vec: {:?}",serialize_task_vec);
                         operator_spawn_vec = respawn_operator(&mut self, serialize_task_vec).await; //respawning task operators
+
 
                         //resetting the values
                         operator_amount = operator_spawn_vec.len();
                         operator_counter = 0;
-                        break;
+                        snapshot_timeout_counter = 0;
+                        self.state_chan_pull.clear_pull_chan();
+                        //task::sleep(Duration::from_secs(4)).await;
+                        self.send_messages(20).await;
                     }
                     else {
                         snapshot_timeout_counter += 1;
@@ -438,7 +443,7 @@ fn create_marker_chan_vec(
     let mut counter = 0;
     for operator in operator_connections {
         match operator.0 {
-            Operators::SourceProducer(_) => counter += 1,
+            Operators::SourceProducer(_) => counter += 1, 
             Operators::Consumer(_) => {}
             Operators::ConsumerProducer(_) => {}
         }

@@ -175,7 +175,6 @@ impl PersistentTask {
 
 pub async fn serialize_state(serde_state: &mut SerdeState) {
     //serializing the vector with all of its snapshot elements
-    
     let bytes = serde_json::to_string(&serde_state.persistent_task_vec).unwrap();
     println!("Serialized vec: {:?}", bytes);
 
@@ -187,7 +186,8 @@ pub async fn save_persistent(serialized_vec: String) {
     //Saving checkpoint to file (appends atm)
     let file = OpenOptions::new()
         .read(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .create(true)
         .open("serialized_checkpoints.txt")
         .await;
@@ -195,10 +195,7 @@ pub async fn save_persistent(serialized_vec: String) {
         .write_all(serialized_vec.as_bytes())
         .await
         .unwrap();
-
-    println!("DONE!, {}", serialized_vec);
-
-    println!("saving checkpoint to persistent disc");
+    println!("Successfully saved checkpoint to persistent disc");
 }
 
 pub async fn load_persistent() -> String {
@@ -223,7 +220,7 @@ pub async fn load_persistent() -> String {
 
 pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut HashMap<u64, u64>) -> Vec<Task> {
     //1:deserialize
-    //2:Link the buffers to the producer
+    //2:Link the buffers
     //2:return the vec
 
     println!("Start deserialize!");
@@ -258,6 +255,7 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
                     let loc_input2 = PullChan::from_persistent(stream2, ptr_vec_hashmap);
                     let loc_output0 = PushChan::from_persistent(out0, ptr_vec_hashmap);
                     let loc_output1 = PushChan::from_persistent(out1, ptr_vec_hashmap);
+                    println!("TESTBBB: {:?}", loc_input2);
                     tasks.push(Task::ConsumerProducer(ConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_output0, out1: loc_output1, count } ));
                 },
                 PersistentConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {
@@ -333,8 +331,11 @@ impl<T: Clone> PullChan<T> {
             PullChan::from_uid(*new_uid)
         } else {
             //insert into the hashtable,
-            let new_input = PullChan::from_vec(input.buffer.unwrap());
+            //let tez = input.log.unwrap();
+            
+            let new_input = PullChan::from_vec_with_log(input.buffer.unwrap(), input.log.unwrap());
             ptr_vec_hashmap.insert(input.uid, new_input.get_uid());
+            //println!("TESTING_LOG1: {:?} {:?}", tez.is_empty(), ptr_vec_hashmap.get(&input.uid));
             new_input
         };
         input

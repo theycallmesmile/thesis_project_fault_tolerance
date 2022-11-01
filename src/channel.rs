@@ -47,6 +47,10 @@ impl<T> Chan<T> {
         let chan_log = VecDeque::with_capacity(CAPACITY);
         Self { queue: Mutex::new(buf.into_iter().collect()), pullvar: Condvar::new(), pushvar: Condvar::new(), log: Mutex::new(chan_log)}
     }
+    fn from_vec_log(buf: Vec<T>, chan_log: Vec<T>) -> Self {
+        //let chan_log = VecDeque::with_capacity(CAPACITY);
+        Self { queue: Mutex::new(buf.into_iter().collect()), pullvar: Condvar::new(), pushvar: Condvar::new(), log: Mutex::new(chan_log.into_iter().collect())}
+    }
 }
 
 #[derive(Debug)]
@@ -70,6 +74,9 @@ impl<T> Clone for PullChan<T> {
 impl<T> PullChan<T> {
     pub fn from_vec(buf: Vec<T>) -> Self {
         Self(Arc::new(Chan::from_vec(buf)))
+    }
+    pub fn from_vec_with_log(buf: Vec<T>, chan_log: Vec<T>) -> Self {
+        Self(Arc::new(Chan::from_vec_log(buf, chan_log)))
     }
     pub fn get_uid(&self) -> u64 {
         Arc::into_raw(self.0.clone()) as *const () as u64
@@ -222,6 +229,12 @@ impl<T:  std::fmt::Debug> PullChan<T> {
         self.0.pushvar.notify_one();
         //println!("****Pulling done");
         data
+    }
+
+    pub async fn clear_pull_chan(&self){
+        let mut queue = self.0.queue.lock().await;
+        queue.clear();
+        drop(queue);
     }
 
     pub async fn pull_log(&self) -> T{

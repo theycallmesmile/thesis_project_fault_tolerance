@@ -56,7 +56,9 @@ pub enum ConsumerProducerState {
 impl ConsumerProducerState {
     pub async fn execute_unoptimized(mut self, ctx: Context) {
         println!("ConsumerProducer Unoptimized ON!");
+        //println!("SELF CONSUMERPRODUCER: {:?}", self);
         loop {
+            //println!("SELF CONSUMERPRODUCER: {:?}", self);
             self = match self {
                 ConsumerProducerState::S0 {
                     stream0,
@@ -67,6 +69,7 @@ impl ConsumerProducerState {
                     count,
                 } => {
                     //state -> s0
+                    println!("producerConsumer: STATE0");
                     let in_event0 = if !stream0.clone().log_length_check().await {
                         stream0.pull_log().await
                     } else {
@@ -91,10 +94,12 @@ impl ConsumerProducerState {
                             //The drained messages are stored for snapshotting.
 
                             println!("Consumer-producer: starting draining!");
+                            println!("STREAM 2 : {:?}",stream2);
                             let loc_stream1 = drain_buffers(&stream1).await;
                             let loc_stream2 = drain_buffers(&stream2).await;
                             println!("Consumer-Producer: Done with draining");
                             println!("LOG CHECK0: {:?}",loc_stream2);
+                            println!("ONLY LOG: {:?}",loc_stream2.0.log);
                             //snapshot state:
                             let snapshot_state = ConsumerProducerState::S0 {
                                 stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
@@ -141,6 +146,7 @@ impl ConsumerProducerState {
                     data,
                 } => {
                     //state -> s1
+                    println!("producerConsumer: STATE1");
                     let in_event1 = if !stream1.clone().log_length_check().await {
                         stream1.pull_log().await
                     } else {
@@ -176,13 +182,13 @@ impl ConsumerProducerState {
                                 count,
                                 data,
                             };
-                            println!("start producer snapshotting");
+                            println!("start ConsumerProducer snapshotting");
                             Shared::<()>::store(
                                 SharedState::ConsumerProducer(snapshot_state.clone()),
                                 &ctx,
                             )
                             .await;
-                            println!("done with producer snapshotting");
+                            println!("done with ConsumerProducer snapshotting");
 
                             //forward the marker to consumers
                             println!("SENDING MARKER!");
@@ -211,6 +217,7 @@ impl ConsumerProducerState {
                     out1,
                     count,
                 } => {
+                    println!("producerConsumer: STATE2");
                     //state -> s2
                     let in_event2 = if !stream2.clone().log_length_check().await {
                         stream2.pull_log().await
