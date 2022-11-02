@@ -10,6 +10,8 @@ use tokio::sync::oneshot;
 
 use std::sync::Arc;
 
+use futures::join;
+
 //Manager module
 use crate::manager::Context;
 use crate::manager::Task;
@@ -237,17 +239,14 @@ impl ConsumerProducerState {
                             }
                         }
                         Event::Marker => {
-                            //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
-                            //Draining from the remaining input streams until a marker is received.
-                            //The drained messages are stored for snapshotting.
-
+                            
                             let loc_stream0 = drain_buffers(&stream0).await;
                             let loc_stream1 = drain_buffers(&stream1).await;
-                            //snapshot state:
+
                             let snapshot_state = ConsumerProducerState::S2 {
-                                stream0: loc_stream0, //is it necessary to clean if log exsists ? Should the messages sent after marker be saved?
+                                stream0: loc_stream0, 
                                 stream1: loc_stream1,
-                                stream2: stream2.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                stream2: stream2.clone().clear_buffer().await, 
                                 out0: out0.clone(),
                                 out1: out1.clone(),
                                 count,
@@ -265,7 +264,7 @@ impl ConsumerProducerState {
                             out0.push(Event::Marker).await;
                             out1.push(Event::Marker).await;
 
-                            //s2
+                            //return back to state 2
                             ConsumerProducerState::S2 {
                                 stream0,
                                 stream1,
@@ -368,29 +367,21 @@ impl ConsumerProducerState {
                             //Only the pull channel buffer will be saved, the push will be reset and relinked by the connected operator down the dataflow graph
                             //Draining from the remaining input streams until a marker is received.
                             //The drained messages are stored for snapshotting.
-                            let loc_stream1 = drain_buffers(&stream1).await;
-                            
-                            /*loop {
-                                match stream2.pull().await {
-                                    Event::Data(event_data_s2) => {
-                                        out1.push(Event::Data(event_data_s2)).await;
-                                    }
-                                    Event::Marker => {
-                                        break;
-                                    },
-                                    Event::MessageAmount(_) => panic!(),
-                                }
-                            }*/
+                            let stream1_future = drain_buffers(&stream1);
+                            let stream2_future = process_until_marker(&stream2, &out1, &count);
+
+                            //join allows both of the functions to run concurrently and awaits until both are done.
+                            let (loc_stream1, (loc_stream2, loc_count)) = join!(stream1_future, stream2_future);
 
 
                             //snapshot state:
                             let snapshot_state = ConsumerProducerState::S0 {//todo: dont need to clear buffer, the manager will only save the logs in the channels. 
                                 stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
                                 stream1: loc_stream1, //Should the messages sent after marker be saved?
-                                stream2: stream2.clone().clear_buffer().await,
+                                stream2: loc_stream2,
                                 out0: out0.clone(),
                                 out1: out1.clone(),
-                                count,
+                                count: loc_count,
                             };
                             println!("start ConsumerProducer snapshotting");
                             Shared::<()>::store(
@@ -451,28 +442,21 @@ impl ConsumerProducerState {
                             //Draining from the remaining input streams until a marker is received.
                             //The drained messages are stored for snapshotting.
 
-                            let loc_stream0 = drain_buffers(&stream0).await;
+                            let stream0_future = drain_buffers(&stream0);
+                            let stream2_future = process_until_marker(&stream2, &out1, &count);
 
-                            loop {
-                                match stream2.pull().await {
-                                    Event::Data(event_data_s2) => {
-                                        out1.push(Event::Data(event_data_s2)).await;
-                                    }
-                                    Event::Marker => {
-                                        break;
-                                    },
-                                    Event::MessageAmount(_) => panic!(),
-                                }
-                            }
+                            //join allows both of the functions to run concurrently and awaits until both are done.
+                            let (loc_stream0, (loc_stream2, loc_count)) = join!(stream0_future, stream2_future);
+                            
 
                             //snapshot state:
                             let snapshot_state = ConsumerProducerState::S1 {
                                 stream0: loc_stream0, //is it necessary to clean if log exsists ? Should the messages sent after marker be saved?
                                 stream1: stream1.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
-                                stream2: stream2.clone().clear_buffer().await,
+                                stream2: loc_stream2,
                                 out0: out0.clone(),
                                 out1: out1.clone(),
-                                count,
+                                count: loc_count,
                                 data,
                             };
                             println!("start producer snapshotting");
@@ -529,66 +513,17 @@ impl ConsumerProducerState {
                             //Draining from the remaining input streams until a marker is received.
                             //The drained messages are stored for snapshotting.
 
+                            let snapshot_state = process_until_marker_multiple(&stream0, &stream1, &stream2, &out0, &out1, &count).await;
 
-                            loop {
-                                let event_data = match stream0.pull().await {
-                                    Event::Data(event_data_0) => {
-                                        event_data_0
-                                    }
-                                    Event::Marker => { 
-                                        let loc_stream1 = drain_buffers(&stream1).await;
 
-                                        //snapshot state:
-                                        let snapshot_state = ConsumerProducerState::S2 {
-                                            stream0: stream0.clone().clear_buffer().await, 
-                                            stream1: loc_stream1,
-                                            stream2: stream2.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
-                                            out0: out0.clone(),
-                                            out1: out1.clone(),
-                                            count,
-                                        };
-                                        println!("start producer snapshotting");
-                                        Shared::<()>::store(
-                                            SharedState::ConsumerProducer(snapshot_state.clone()),
-                                            &ctx,
-                                        )
-                                        .await;
-                                        println!("done with producer snapshotting");
+                            println!("start producer snapshotting");
+                            Shared::<()>::store(
+                                SharedState::ConsumerProducer(snapshot_state),
+                                &ctx,
+                            )
+                            .await;
+                            println!("done with producer snapshotting");
 
-                                        break;
-                                    },
-                                    Event::MessageAmount(_) => panic!(),
-                                };
-                                match stream1.pull().await {
-                                    Event::Data(event_data_1) => {
-                                        out0.push(Event::Data(event_data.clone() + event_data_1)).await;
-                                    }
-                                    Event::Marker => {
-                                        let loc_stream0 = drain_buffers(&stream0).await;
-
-                                        //snapshot state: //maybe ::S1 instead?
-                                        let snapshot_state = ConsumerProducerState::S2 {//TODO: BUG IN THE STATE, NEED TO SAVE event_data incase it has value in it
-                                            stream0: loc_stream0,
-                                            stream1: stream1.clone().clear_buffer().await,
-                                            stream2: stream2.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
-                                            out0: out0.clone(),
-                                            out1: out1.clone(),
-                                            count,
-                                            //might need event_data: event_data.clone(), here 
-                                        };
-                                        println!("start producer snapshotting");
-                                        Shared::<()>::store(
-                                            SharedState::ConsumerProducer(snapshot_state.clone()),
-                                            &ctx,
-                                        )
-                                        .await;
-                                        println!("done with producer snapshotting");
-
-                                        break;
-                                    },
-                                    Event::MessageAmount(_) => panic!(),
-                                }
-                            }
                             //forward the marker to consumers
                             println!("SENDING MARKER!");
                             out0.push(Event::Marker).await;
@@ -626,4 +561,89 @@ pub async fn drain_buffers(stream: &PullChan<Event<i32>>) -> PullChan<Event<i32>
         }
     }
     stream.clone()
+}
+
+pub async fn process_until_marker(stream: &PullChan<Event<i32>>, out: &PushChan<Event<i32>>, count: &i32) -> (PullChan<Event<i32>>, i32){
+    let mut loc_count = count.clone(); 
+    loop {
+        let in_event = if !stream.clone().log_length_check().await {
+            stream.pull_log().await
+        } else {
+            stream.pull().await
+        };
+
+        match in_event {
+            Event::Data(event_data_s2) => {
+                out.push(Event::Data(event_data_s2)).await;
+                loc_count += 1;
+            }
+            Event::Marker => {
+                break;
+            },
+            Event::MessageAmount(_) => panic!(),
+        }
+    }
+    (stream.clone(), loc_count)
+}
+
+
+pub async fn process_until_marker_multiple(stream0: &PullChan<Event<i32>>, stream1: &PullChan<Event<i32>>, stream2: &PullChan<Event<i32>>, out0: &PushChan<Event<i32>>, out1: &PushChan<Event<i32>>, count: &i32) -> ConsumerProducerState{
+    let mut snapshot_state: ConsumerProducerState;
+    let mut loc_count = count.clone();
+
+    loop{
+        let in_event0 = if !stream0.clone().log_length_check().await {
+            stream0.pull_log().await
+        } else {
+            stream0.pull().await
+        }; 
+
+        match in_event0 {
+            Event::Data(event_data_0) => {
+                loc_count += 1;
+
+                let in_event1 = if !stream1.clone().log_length_check().await {
+                    stream1.pull_log().await
+                } else {
+                    stream1.pull().await
+                };
+
+                match in_event1 {
+                    Event::Data(event_data_1) => {
+                        out0.push(Event::Data(event_data_0.clone() + event_data_1)).await;
+                        loc_count += 1;
+                    }
+                    Event::Marker => {
+                        let loc_stream0 = drain_buffers(&stream0).await;
+                        
+                        snapshot_state = ConsumerProducerState::S2 {
+                            stream0: loc_stream0,
+                            stream1: stream1.clone().clear_buffer().await,
+                            stream2: stream2.clone().clear_buffer().await,
+                            out0: out0.clone(),
+                            out1: out1.clone(),
+                            count: count.clone(),
+                        };
+                        break;
+                    },
+                    Event::MessageAmount(_) => panic!(),
+                }
+            }
+            Event::Marker => { 
+                let loc_stream1 = drain_buffers(&stream1).await;
+
+                snapshot_state = ConsumerProducerState::S2 {
+                    stream0: stream0.clone().clear_buffer().await, 
+                    stream1: loc_stream1,
+                    stream2: stream2.clone().clear_buffer().await,
+                    out0: out0.clone(),
+                    out1: out1.clone(),
+                    count: count.clone(),
+                };
+                break;
+            },
+            Event::MessageAmount(_) => panic!(),
+        }                            
+    }
+    snapshot_state
 }
