@@ -17,6 +17,9 @@ use crate::channel::channel_vec;
 use crate::channel::CAPACITY;
 use crate::consumerProducer::ConsumerProducerState;
 
+//Time
+use std::time::Instant;
+
 //Serialize module
 use crate::serialization::load_deserialize;
 use crate::serialization::load_persistent;
@@ -126,8 +129,9 @@ impl Manager {
         let mut operator_counter = 0;
 
         //Giving permission for message creation in producers
-        self.send_messages(20).await;
+        self.send_messages(30).await;
         //Sending markers to the producers
+        let now = Instant::now();
         self.send_markers().await;
         
         
@@ -174,7 +178,8 @@ impl Manager {
                             println!("operator_amount: {}, operator_counter: {}",&operator_amount,&operator_counter);
                             if (operator_amount == operator_counter){ //change operator_counter TO -> serde_state.persistent_task_vec.len()?
                                 println!("CHECKPOINTING!!");
-                                serialize_state(&mut serde_state).await;
+                                println!("TIME!: {}", now.elapsed().as_millis());
+                                //serialize_state(&mut serde_state).await;
                                 break;
                             }
                         },
