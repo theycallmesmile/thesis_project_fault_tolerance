@@ -35,6 +35,7 @@ pub enum ConsumerState {
 
 impl ConsumerState {
     pub async fn execute_unoptimized(mut self, ctx: Context) {
+        let mut benchmark_token_count = 0;
         println!("consumer ON!");
         loop {
             self = match self {
@@ -44,14 +45,11 @@ impl ConsumerState {
                     match in_event0 {
                         Event::Data(event_data_s0) => {
                             let loc_count = count + 1;
-                            println!("The consumer received: {}", event_data_s0);
                             ConsumerState::S0 { stream0, count: loc_count }
                         }
                         Event::Marker => {
-                            //draining not needed since only one in_stream
-
                             let snapshot_state = ConsumerState::S0 {
-                                stream0: stream0.clone().clear_buffer().await, //data after marker should not be saved. thus, it is cleaned
+                                stream0, 
                                 count,
                             };
 
@@ -61,12 +59,10 @@ impl ConsumerState {
                                 &ctx,
                             )
                             .await;
-                            println!("done with Consumer snapshotting");
-
-                            ConsumerState::S0 { stream0, count }
+                            snapshot_state
                         }
-                        Event::MessageAmount(_) => {
-                            panic!()
+                        Event::MessageAmount(b_count) => {
+                            panic!();                            
                         }
                     }
                 }

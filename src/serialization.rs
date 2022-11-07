@@ -111,7 +111,6 @@ pub struct PersistentPullChan<T> {
 
 impl Task {
     pub async fn to_persistent_task(self, serde_state: &mut SerdeState) -> PersistentTask {
-        println!("serialization: {:?}",self);
         match self {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
@@ -176,7 +175,7 @@ impl PersistentTask {
 pub async fn serialize_state(serde_state: &mut SerdeState) {
     //serializing the vector with all of its snapshot elements
     let bytes = serde_json::to_string(&serde_state.persistent_task_vec).unwrap();
-    println!("Serialized vec: {:?}", bytes);
+    //println!("Serialized vec: {:?}", bytes);
 
     save_persistent(bytes).await;
 }
@@ -303,7 +302,8 @@ impl<T: Clone> PushChan<T> {
             PushChan::from_uid(*new_uid)
         } else {
             //insert into the hashtable,
-            let new_input = PushChan::from_vec(input.buffer.unwrap());
+            //let new_input = PushChan::from_vec(input.buffer.unwrap());
+            let new_input = PushChan::new();
             ptr_vec_hashmap.insert(input.uid, new_input.get_uid());
             new_input
         };
@@ -333,7 +333,7 @@ impl<T: Clone> PullChan<T> {
             //insert into the hashtable,
             //let tez = input.log.unwrap();
             
-            let new_input = PullChan::from_vec_with_log(input.buffer.unwrap(), input.log.unwrap());
+            let new_input = PullChan::from_vec_with_log(input.log.unwrap());
             ptr_vec_hashmap.insert(input.uid, new_input.get_uid());
             //println!("TESTING_LOG1: {:?} {:?}", tez.is_empty(), ptr_vec_hashmap.get(&input.uid));
             new_input

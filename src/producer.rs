@@ -4,6 +4,8 @@ use serde::{Deserializer, Serializer};
 use std::time::Duration;
 use tokio::time;
 
+use async_std::task;
+
 use tokio::sync::oneshot;
 
 use std::sync::Arc;
@@ -37,21 +39,17 @@ impl ProducerState {
             self = match self {
                 ProducerState::S0 { out0, count } => {
                     let manager_event = ctx.marker_manager_recv.as_ref().unwrap().pull().await;
-                    println!("manager_event: {:?}", manager_event);
                     match manager_event {
-                        Event::Data(_) => {panic!()}
+                        Event::Data(_) => {
+                            panic!();
+                        }
                         Event::Marker => {
-                            //snapshoting
                             let snapshot_state = ProducerState::S0 {
                                 out0: out0.clone(),
                                 count,
                             };
-
                             println!("start producer snapshotting");
                             Shared::<()>::store(SharedState::Producer(snapshot_state), &ctx).await;
-                            println!("Done with producer snapshotting");
-                            //forward the marker to consumers
-                            println!("Producer - SENDING MARKER!");
                             out0.push(Event::Marker).await;
 
                             ProducerState::S0 {
@@ -60,9 +58,9 @@ impl ProducerState {
                             }
                         }
                         Event::MessageAmount(amount) => {
-                            println!("Received request of amount: {}", amount);
                             let mut loc_count = count; 
                             for x in 0..amount {
+                                task::sleep(Duration::from_millis(10)).await;
                                 out0.push(Event::Data(2)).await;
                                 loc_count += 1;
                             }
