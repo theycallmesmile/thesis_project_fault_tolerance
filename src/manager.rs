@@ -208,20 +208,6 @@ impl Manager {
                             }
                             TaskToManagerMessage::Benchmark(_, promise) => {
                                 panic!();
-                                println!("sending promise: {}", benchmarking_counter);
-                                promise.send(benchmarking_counter);
-                                benchmarking_counter +=1;
-                                if(benchmarking_counter == 2) {
-                                    benchmarking_counter = 0;
-                                    let timer_now = timer_now.elapsed().as_millis();
-                                    benchmarking_timer_iteration.push_back(timer_now as f64);
-                                    println!("TIME!: {:?}", benchmarking_timer_iteration);
-
-                                    //self.state_chan_pull.clear_pull_chan().await;
-                                    self.reset_values(&mut operator_amount, operator_spawn_vec.len(), &mut operator_counter, &mut snapshot_timeout_counter, &mut serde_state).await;
-                                    break;
-                                }
-
                             }
                         };
                     },
