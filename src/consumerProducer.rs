@@ -220,57 +220,6 @@ impl ConsumerProducerState {
 
     pub async fn execute_optimized(mut self, ctx: Context) {
         println!("ConsumerProducer optimized ON!");
-
-        let mut return_state = match &self {
-            ConsumerProducerState::S0 {
-                stream0,
-                stream1,
-                stream2,
-                out0,
-                out1,
-                count,
-            } => ConsumerProducerState::S0 {
-                stream0: stream0.to_owned(),
-                stream1: stream1.to_owned(),
-                stream2: stream2.to_owned(),
-                out0: out0.to_owned(),
-                out1: out1.to_owned(),
-                count: count.to_owned(),
-            },
-            ConsumerProducerState::S1 {
-                stream0,
-                stream1,
-                stream2,
-                out0,
-                out1,
-                count,
-                data,
-            } => ConsumerProducerState::S1 {
-                stream0: stream0.to_owned(),
-                stream1: stream1.to_owned(),
-                stream2: stream2.to_owned(),
-                out0: out0.to_owned(),
-                out1: out1.to_owned(),
-                count: count.to_owned(),
-                data: count.to_owned(),
-            },
-            ConsumerProducerState::S2 {
-                stream0,
-                stream1,
-                stream2,
-                out0,
-                out1,
-                count,
-            } => ConsumerProducerState::S2 {
-                stream0: stream0.to_owned(),
-                stream1: stream1.to_owned(),
-                stream2: stream2.to_owned(),
-                out0: out0.to_owned(),
-                out1: out1.to_owned(),
-                count: count.to_owned(),
-            },
-        };
-
         loop {
             self = match self {
                 ConsumerProducerState::S0 {
