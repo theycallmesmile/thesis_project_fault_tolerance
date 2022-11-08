@@ -66,7 +66,7 @@ impl ProducerState {
                             }
                             ProducerState::S0 {
                                 out0,
-                                count,
+                                count: loc_count,
                             }
                         }
                     }
