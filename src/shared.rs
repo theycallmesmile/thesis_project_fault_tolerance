@@ -19,7 +19,7 @@ use crate::manager::Task;
 use crate::manager::TaskToManagerMessage;
 
 //ConsumerProducer module
-use crate::consumerProducer::ConsumerProducerState;
+use crate::consumer_producer::ConsumerProducerState;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Event<T> {

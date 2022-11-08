@@ -14,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 
 //use serde::ser::{Serializer, SerializeSeq};
 //ConsumerProducer Module
-use crate::consumerProducer::ConsumerProducerState;
+use crate::consumer_producer::ConsumerProducerState;
 
 //Manager module
 use crate::manager::SerializeTaskVec;
@@ -128,7 +128,7 @@ impl Task {
                 }
             },
             Task::ConsumerProducer(state) => match state {
-                crate::consumerProducer::ConsumerProducerState::S0 { stream0, stream1, stream2, out0, out1, count } => {
+                crate::consumer_producer::ConsumerProducerState::S0 { stream0, stream1, stream2, out0, out1, count } => {
                     let loc_input0 = stream0.to_persistent(serde_state).await;
                     let loc_input1 = stream1.to_persistent(serde_state).await;
                     let loc_input2 = stream2.to_persistent(serde_state).await;
@@ -137,7 +137,7 @@ impl Task {
 
                     PersistentTask::ConsumerProducer(PersistentConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count } )
                 },
-                crate::consumerProducer::ConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {
+                crate::consumer_producer::ConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {
                     let loc_input0 = stream0.to_persistent(serde_state).await;
                     let loc_input1 = stream1.to_persistent(serde_state).await;
                     let loc_input2 = stream2.to_persistent(serde_state).await;
@@ -146,7 +146,7 @@ impl Task {
                     
                     PersistentTask::ConsumerProducer(PersistentConsumerProducerState::S1 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count, data } )
                 },
-                crate::consumerProducer::ConsumerProducerState::S2 { stream0, stream1, stream2, out0, out1, count } => {
+                crate::consumer_producer::ConsumerProducerState::S2 { stream0, stream1, stream2, out0, out1, count } => {
                     let loc_input0 = stream0.to_persistent(serde_state).await;
                     let loc_input1 = stream1.to_persistent(serde_state).await;
                     let loc_input2 = stream2.to_persistent(serde_state).await;

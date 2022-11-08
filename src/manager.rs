@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::channel::channel_vec;
 use crate::channel::CAPACITY;
-use crate::consumerProducer::ConsumerProducerState;
+use crate::consumer_producer::ConsumerProducerState;
 
 //Time
 use std::time::Instant;
