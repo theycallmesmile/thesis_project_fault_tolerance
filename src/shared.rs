@@ -69,44 +69,4 @@ impl<T> Shared<T> {
 
         println!("Got the promise: {}", result.unwrap());
     }
-
-    /*pub async fn store_modified(shared_state: SharedState, ctx: &Context) {
-        let (send, mut recv) = oneshot::channel();
-
-        let evnt = match shared_state {
-            SharedState::Producer(producer_state) => {
-                TaskToManagerMessage::Serialise(Task::Producer(producer_state), send)
-            },
-            SharedState::ConsumerProducer(producer_consumer_state) => {
-                TaskToManagerMessage::Serialise(Task::ConsumerProducer(producer_consumer_state), send)
-            },
-            SharedState::Consumer(consumer_state) => {
-                TaskToManagerMessage::Serialise(Task::Consumer(consumer_state), send)
-            },
-            SharedState::Benchmark() => todo!(),
-        };
-
-        println!("pushed state snapshot to manager");
-        ctx.state_manager_send.push(evnt).await;
-        println!("waiting for promise");
-
-        let result = recv.await;
-
-        println!("Got the promise: {}", result.unwrap());
-    }*/
-
-    pub async fn benchmarking_token(ctx: &Context) {
-        let (send, mut recv) = oneshot::channel();
-
-        let evnt = TaskToManagerMessage::Benchmark((), send);
-
-        println!("pushed benchmark to manager");
-        ctx.state_manager_send.push(evnt).await;
-        println!("waiting for benchmark promise ");
-
-        let result = recv.await;
-
-        println!("Got the benchmark promise: {}", result.unwrap());
-    }
-
 }

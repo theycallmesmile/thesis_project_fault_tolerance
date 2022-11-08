@@ -66,7 +66,6 @@ pub struct Manager {
 #[derive(Debug)]
 pub enum TaskToManagerMessage {
     Serialise(Task, oneshot::Sender<u64>),
-    Benchmark((), oneshot::Sender<u64>),
 }
 
 #[derive(Debug, Clone)]
@@ -205,9 +204,6 @@ impl Manager {
                                         break;
                                     }
                                 }
-                            }
-                            TaskToManagerMessage::Benchmark(_, promise) => {
-                                panic!();
                             }
                         };
                     },
