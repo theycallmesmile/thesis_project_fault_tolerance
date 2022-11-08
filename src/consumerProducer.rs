@@ -102,8 +102,7 @@ impl ConsumerProducerState {
                             )
                             .await;
 
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
 
                             snapshot_state
                         }
@@ -155,8 +154,7 @@ impl ConsumerProducerState {
                             )
                             .await;
 
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
 
                             snapshot_state
                         }
@@ -207,8 +205,7 @@ impl ConsumerProducerState {
                             )
                             .await;
   
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
 
                             snapshot_state
                         }
@@ -318,8 +315,7 @@ impl ConsumerProducerState {
                             )
                             .await;
 
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
 
                             snapshot_state
                         }
@@ -374,8 +370,7 @@ impl ConsumerProducerState {
                             )
                             .await;
 
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
 
                             snapshot_state
                         }
@@ -416,8 +411,7 @@ impl ConsumerProducerState {
                             )
                             .await;
 
-                            out0.push(Event::Marker).await;
-                            out1.push(Event::Marker).await;
+                            join!(out0.push(Event::Marker), out1.push(Event::Marker));
                             snapshot_state
                         }
                         Event::MessageAmount(_) => {
