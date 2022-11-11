@@ -2,10 +2,12 @@ use core::panic;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-
-use crate::serialization::SerdeState;
-
 use tokio::sync::oneshot;
+
+//Serialization module
+use crate::serialization::PersistentTask;
+use crate::serialization::PartialPersistentTask;
+use crate::serialization::SerdeState;
 
 //Consumer module
 use crate::consumer::ConsumerState;
@@ -15,8 +17,8 @@ use crate::producer::ProducerState;
 
 //Manager module
 use crate::manager::Context;
-use crate::manager::Task;
-use crate::manager::TaskToManagerMessage;
+//use crate::manager::Task;
+use crate::manager::PersistentTaskToManagerMessage;
 
 //ConsumerProducer module
 use crate::consumer_producer::ConsumerProducerState;
@@ -24,7 +26,7 @@ use crate::consumer_producer::ConsumerProducerState;
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Event<T> {
     Data(T),
-    Marker,
+    Marker(i32),
     MessageAmount(i32),
 }
 
@@ -32,8 +34,8 @@ pub enum SharedState {
     Producer(ProducerState),
     ConsumerProducer(ConsumerProducerState),
     Consumer(ConsumerState),
-    Benchmark(),
 }
+
 
 
 #[derive(Clone)]
@@ -45,20 +47,22 @@ impl<T> Shared<T> {
         
     }
 
-    pub async fn store(shared_state: SharedState, ctx: &Context) {
+    pub async fn persistent_store(shared_state: PartialPersistentTask, m_id: i32, ctx: &Context) {
         let (send, mut recv) = oneshot::channel();
 
         let evnt = match shared_state {
-            SharedState::Producer(producer_state) => {
-                TaskToManagerMessage::Serialise(Task::Producer(producer_state), send)
+            PartialPersistentTask::Consumer(consumer_state) => {
+                PersistentTaskToManagerMessage::Serialise(PartialPersistentTask::Consumer(consumer_state), m_id, send)
             },
-            SharedState::ConsumerProducer(producer_consumer_state) => {
-                TaskToManagerMessage::Serialise(Task::ConsumerProducer(producer_consumer_state), send)
+            PartialPersistentTask::Producer(producer_state) => {
+                PersistentTaskToManagerMessage::Serialise(PartialPersistentTask::Producer(producer_state), m_id, send)
             },
-            SharedState::Consumer(consumer_state) => {
-                TaskToManagerMessage::Serialise(Task::Consumer(consumer_state), send)
+            PartialPersistentTask::ConsumerProducer(consumer_producer_state) => {
+                PersistentTaskToManagerMessage::Serialise(PartialPersistentTask::ConsumerProducer(consumer_producer_state), m_id, send)
             },
-            SharedState::Benchmark() => panic!(),
+            PartialPersistentTask::PartialConsumerProducer(partial_consumer_producer_state) => {
+                PersistentTaskToManagerMessage::Serialise(PartialPersistentTask::PartialConsumerProducer(partial_consumer_producer_state), m_id, send)
+            },
         };
 
         println!("pushed state snapshot to manager");
@@ -69,4 +73,13 @@ impl<T> Shared<T> {
 
         println!("Got the promise: {}", result.unwrap());
     }
+
+    pub async fn end_message(ctx: &Context) {
+        let (send, mut recv) = oneshot::channel();
+        ctx.state_manager_send.push(PersistentTaskToManagerMessage::Benchmarking(send)).await;
+        let result = recv.await;
+        println!("RECEIVED PROMISE: {}", result.unwrap());
+    }
+
+
 }

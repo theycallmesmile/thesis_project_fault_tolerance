@@ -12,9 +12,11 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+
 //use serde::ser::{Serializer, SerializeSeq};
 //ConsumerProducer Module
 use crate::consumer_producer::ConsumerProducerState;
+use crate::consumer_producer::PartialConsumerProducerState;
 
 //Manager module
 use crate::manager::SerializeTaskVec;
@@ -42,13 +44,21 @@ pub struct SerdeState {
     pub serialised: HashSet<*const ()>, //raw pointer adress av arc chan
     //pub deserialised: HashMap<*const (), *const ()>, //adress av  |
     pub deserialised: HashMap<u64, u64>,
-    pub persistent_task_vec: Vec<PersistentTask>, 
+    pub persistent_task_map: HashMap<i32, Vec<PersistentTask>>, 
 }
 #[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
 pub enum PersistentTask {
     Consumer(PersistentConsumerState),
     Producer(PersistentProducerState),
     ConsumerProducer(PersistentConsumerProducerState),
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Clone)]
+pub enum PartialPersistentTask {
+    Consumer(PersistentConsumerState),
+    Producer(PersistentProducerState),
+    ConsumerProducer(PersistentConsumerProducerState),
+    PartialConsumerProducer(PartialPersistentConsumerProducerState),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -97,6 +107,25 @@ pub enum PersistentConsumerProducerState {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum PartialPersistentConsumerProducerState {
+    S0 {
+        stream0: PersistentPullChan<Event<i32>>,
+        stream1: PersistentPullChan<Event<i32>>,
+        out0: PersistentPushChan<Event<i32>>,
+    },
+    S1 {
+        stream0: PersistentPullChan<Event<i32>>,
+        stream1: PersistentPullChan<Event<i32>>,
+        out0: PersistentPushChan<Event<i32>>,
+        data: i32,
+    },
+    S2 {
+        stream2: PersistentPullChan<Event<i32>>,
+        out1: PersistentPushChan<Event<i32>>,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PersistentPushChan<T> {
     pub uid: u64,
     pub buffer: Option<Vec<T>>,
@@ -110,57 +139,79 @@ pub struct PersistentPullChan<T> {
 }
 
 impl Task {
-    pub async fn to_persistent_task(self, serde_state: &mut SerdeState) -> PersistentTask {
+    pub async fn to_partial_persistent_task(self) -> PartialPersistentTask {
+        let mut serialised: HashSet<u64> = HashSet::new();
         match self {
             Task::Producer(state) => match state {
                 ProducerState::S0 {
                     out0,
                     count,
                 } => {
-                    let loc_output0 = out0.to_persistent(serde_state).await;
-                    PersistentTask::Producer(PersistentProducerState::S0 { output0: loc_output0, count })
+                    let loc_output0 = out0.to_persistent(&mut serialised).await;
+                    PartialPersistentTask::Producer(PersistentProducerState::S0 { output0: loc_output0, count })
                 }
             },
             Task::Consumer(state) => match state { //never needed?
                 ConsumerState::S0 { stream0, count } => {
-                    let loc_input0 = stream0.to_persistent(serde_state).await;
-                    PersistentTask::Consumer(PersistentConsumerState::S0 { input0: loc_input0, count })
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    PartialPersistentTask::Consumer(PersistentConsumerState::S0 { input0: loc_input0, count })
                 }
             },
-            Task::ConsumerProducer(state) => match state {
-                crate::consumer_producer::ConsumerProducerState::S0 { stream0, stream1, stream2, out0, out1, count } => {
-                    let loc_input0 = stream0.to_persistent(serde_state).await;
-                    let loc_input1 = stream1.to_persistent(serde_state).await;
-                    let loc_input2 = stream2.to_persistent(serde_state).await;
-                    let loc_out0 = out0.to_persistent(serde_state).await;
-                    let loc_out1 = out1.to_persistent(serde_state).await;
+            Task::PartialConsumerProducer(state) => match state {
+                PartialConsumerProducerState::S0 { stream0, stream1, out0 } => {
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    let loc_input1 = stream1.to_persistent(&mut serialised).await;
+                    let loc_out0 = out0.to_persistent(&mut serialised).await;
+                    
+                    PartialPersistentTask::PartialConsumerProducer(PartialPersistentConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, out0: loc_out0 } )
+                },
+                PartialConsumerProducerState::S1 { stream0, stream1, out0, data } => {
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    let loc_input1 = stream1.to_persistent(&mut serialised).await;
+                    let loc_out0 = out0.to_persistent(&mut serialised).await;
+                    
+                    PartialPersistentTask::PartialConsumerProducer(PartialPersistentConsumerProducerState::S1 { stream0: loc_input0, stream1: loc_input1, out0: loc_out0, data } )
+                },
+                PartialConsumerProducerState::S2 { stream2, out1 } => {
+                    let loc_input2 = stream2.to_persistent(&mut serialised).await;
+                    let loc_out1 = out1.to_persistent(&mut serialised).await;
+                    
+                    PartialPersistentTask::PartialConsumerProducer(PartialPersistentConsumerProducerState::S2 { stream2: loc_input2, out1: loc_out1 } )
+                },
+            },
+            Task::ConsumerProducer(state) =>  match state {
+                ConsumerProducerState::S0 { stream0, stream1, stream2, out0, out1, count } => {
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    let loc_input1 = stream1.to_persistent(&mut serialised).await;
+                    let loc_input2 = stream2.to_persistent(&mut serialised).await;
+                    let loc_out0 = out0.to_persistent(&mut serialised).await;
+                    let loc_out1 = out1.to_persistent(&mut serialised).await;
 
-                    PersistentTask::ConsumerProducer(PersistentConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count } )
+                    PartialPersistentTask::ConsumerProducer(PersistentConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count } )
                 },
-                crate::consumer_producer::ConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {
-                    let loc_input0 = stream0.to_persistent(serde_state).await;
-                    let loc_input1 = stream1.to_persistent(serde_state).await;
-                    let loc_input2 = stream2.to_persistent(serde_state).await;
-                    let loc_out0 = out0.to_persistent(serde_state).await;
-                    let loc_out1 = out1.to_persistent(serde_state).await;
+                ConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    let loc_input1 = stream1.to_persistent(&mut serialised).await;
+                    let loc_input2 = stream2.to_persistent(&mut serialised).await;
+                    let loc_out0 = out0.to_persistent(&mut serialised).await;
+                    let loc_out1 = out1.to_persistent(&mut serialised).await;
                     
-                    PersistentTask::ConsumerProducer(PersistentConsumerProducerState::S1 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count, data } )
+                    PartialPersistentTask::ConsumerProducer(PersistentConsumerProducerState::S1 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count, data } )
                 },
-                crate::consumer_producer::ConsumerProducerState::S2 { stream0, stream1, stream2, out0, out1, count } => {
-                    let loc_input0 = stream0.to_persistent(serde_state).await;
-                    let loc_input1 = stream1.to_persistent(serde_state).await;
-                    let loc_input2 = stream2.to_persistent(serde_state).await;
-                    let loc_out0 = out0.to_persistent(serde_state).await;
-                    let loc_out1 = out1.to_persistent(serde_state).await;
+                ConsumerProducerState::S2 { stream0, stream1, stream2, out0, out1, count } => {
+                    let loc_input0 = stream0.to_persistent(&mut serialised).await;
+                    let loc_input1 = stream1.to_persistent(&mut serialised).await;
+                    let loc_input2 = stream2.to_persistent(&mut serialised).await;
+                    let loc_out0 = out0.to_persistent(&mut serialised).await;
+                    let loc_out1 = out1.to_persistent(&mut serialised).await;
                     
-                    PersistentTask::ConsumerProducer(PersistentConsumerProducerState::S2 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count } )
+                    PartialPersistentTask::ConsumerProducer(PersistentConsumerProducerState::S2 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_out0, out1: loc_out1, count } )
                 },
+           
             },
         }
     }
-    /*pub async fn from_persistent_task(self, serde_state: &mut SerdeState) -> Task { //Not used
-        todo!()
-    }*/
+
 }
 
 impl PersistentTask {
@@ -172,9 +223,10 @@ impl PersistentTask {
 }
 
 
-pub async fn serialize_state(serde_state: &mut SerdeState) {
+pub async fn serialize_state(state: &Vec<PersistentTask>){//(serde_state: &mut SerdeState) {
     //serializing the vector with all of its snapshot elements
-    let bytes = serde_json::to_string(&serde_state.persistent_task_vec).unwrap();
+    //let bytes = serde_json::to_string(&serde_state.persistent_task_vec).unwrap();
+    let bytes = serde_json::to_string(&state).unwrap();
     //println!("Serialized vec: {:?}", bytes);
 
     save_persistent(bytes).await;
@@ -281,10 +333,10 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
 
 impl<T: Clone> PushChan<T> {
     //producer: used to check if the buffer excists in the hashset, otherwise insert it into the hashset
-    pub async fn to_persistent(&self, serde_state: &mut SerdeState) -> PersistentPushChan<T> {
+    pub async fn to_persistent(&self, serialised: &mut HashSet<u64>) -> PersistentPushChan<T> {
         let queue = self.0.queue.lock().await;
-        let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const ();
-        let buffer = if serde_state.serialised.contains(&ptr) {
+        let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const () as u64;
+        let buffer = if serialised.contains(&ptr) {
             None
         } else {
             None
@@ -313,9 +365,9 @@ impl<T: Clone> PushChan<T> {
 
 impl<T: Clone> PullChan<T> {
     //consumer: used to check if the buffer excists in the hashset, otherwise insert it into the hashset
-    pub async fn to_persistent(&self, serde_state: &mut SerdeState) -> PersistentPullChan<T> {
+    pub async fn to_persistent(&self, serialised: &mut HashSet<u64>) -> PersistentPullChan<T> { //TODO: REMOVE BUFFER, DONT NEED TO SAVE BUFFER SINCE IT DOESNT MATTER. IT WILL BE EMPTY DURING RECOVERY
         let loc_log = &self.get_log().await;
-        let (loc_buffer,loc_ptr) = &self.get_buffer(serde_state).await;
+        let (loc_buffer,loc_ptr) = &self.get_buffer(serialised).await;
         PersistentPullChan {
             uid: loc_ptr.clone(),
             buffer: loc_buffer.clone(),
@@ -343,24 +395,19 @@ impl<T: Clone> PullChan<T> {
 
     pub async fn get_log(&self) -> Option<Vec<T>>{
         let log = self.0.log.lock().await;
-        let return_log = Some(log.iter().cloned().collect());
-        drop(log);
-        return_log
+        Some(log.iter().cloned().collect())
     }
 
-    pub async fn get_buffer(&self, serde_state: &mut SerdeState) -> (Option<Vec<T>>, u64) {
+    pub async fn get_buffer(&self, serialised: &mut HashSet<u64>) -> (Option<Vec<T>>, u64) {
         let queue = self.0.queue.lock().await;
-        let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const ();
-        let buffer = if serde_state.serialised.contains(&ptr) {
+        let ptr = std::sync::Arc::into_raw(self.0.clone()) as *const () as u64;
+        let buffer = if serialised.contains(&ptr) {
             None
         } else {
-            serde_state.serialised.insert(ptr);
+            serialised.insert(ptr);
             Some(queue.iter().cloned().collect())
         };
         drop(queue);
         (buffer, ptr as u64)
     }
 }
-
-//insert to hashmap anyway
-//replace if the value is empty [] using len prev_val.len < curr_val.len ->replace
