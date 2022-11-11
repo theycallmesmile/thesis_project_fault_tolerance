@@ -1,8 +1,12 @@
+use futures::future::join;
+use futures::join;
 use tokio::sync::Notify;
 //use tokio::sync::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use async_std::task;
+use std::time::Duration;
 use async_std::sync::{Condvar, Mutex};
 
 use serde::Deserialize;
@@ -110,9 +114,17 @@ pub fn channel<T>() -> (PushChan<T>, PullChan<T>) {
     (PushChan(chan.clone()), PullChan(chan))
 }
 
-pub fn channel_vec<T>(amount: usize) -> Vec<(PushChan<T>, PullChan<T>)> {
+pub fn channel_vec<T>(amount: usize) -> Vec<(PushChan<T>, PullChan<T>)> { //ORIGINAL -- REMOVE AND REPLACE WITH MODIFIED
     let mut chan_vec: Vec<(PushChan<T>, PullChan<T>)> = Vec::new();
     for n in 0..amount {
+        let chan = Arc::new(Chan::new(CAPACITY));
+        chan_vec.push((PushChan(chan.clone()), PullChan(chan)));
+    }
+    chan_vec
+}
+pub fn channel_vec_modified<T>(amount_vec: Vec<i32>) -> Vec<(PushChan<T>, PullChan<T>)> {
+    let mut chan_vec: Vec<(PushChan<T>, PullChan<T>)> = Vec::new();
+    for n in amount_vec {
         let chan = Arc::new(Chan::new(CAPACITY));
         chan_vec.push((PushChan(chan.clone()), PullChan(chan)));
     }
@@ -158,11 +170,13 @@ impl<T:  std::fmt::Debug> PullChan<T> {
             .0
             .pullvar
             .wait_until(queue, |queue| {
+                //println!("queue: {:?}, self: {:?}",queue, self);
                 !queue.is_empty()
             })
             .await;
         let data = queue.pop_front().unwrap();
         drop(queue);
+        //println!("the data: {:?}", data);
         self.0.pushvar.notify_one();
         data
     }
@@ -205,13 +219,44 @@ impl<T:  std::fmt::Debug> PullChan<T> {
         self.0.log.lock().await.is_empty()
     }
 
+    pub async fn buffer_length_check(&self) -> bool {
+        self.0.queue.lock().await.is_empty()
+    }
+
+    pub async fn check_pull_length(&self) {//testing, remove when done
+        let mut queue = self.0.queue.lock().await;
+        let mut log = self.0.log.lock().await;
+        self
+            .0
+            .pullvar
+            .wait_until(queue, |queue| {
+                (!queue.is_empty() || !log.is_empty())
+            })
+            .await;
+        self.0.pushvar.notify_one();
+    }
+
     pub async fn pull_buff_log(&self) -> T {
         let in_event0 = if !self.log_length_check().await {
             self.pull_log().await
         } else {
-            self.pull().await
+            let rtrn = self.pull().await;
+            rtrn
         };
         in_event0
+    }
+
+    pub async fn check_pull_length_original(&self) {
+        loop{
+            let (log_check, buffer_check) = join!(self.log_length_check(), self.buffer_length_check());
+            task::sleep(Duration::from_millis(2)).await; //change to some notification system
+            if (!log_check || !buffer_check){
+                break;
+            }
+        }
+    }
+    pub async fn check_pull_length_original2(&self) {
+        //self.testing().await;
     }
 }
 

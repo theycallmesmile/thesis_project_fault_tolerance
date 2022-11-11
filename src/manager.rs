@@ -15,10 +15,11 @@ use serde::Serialize;
 
 use crate::channel::channel_vec;
 use crate::channel::CAPACITY;
-use crate::consumer_producer::ConsumerProducerState;
+use crate::serialization::PersistentConsumerProducerState;
+
 
 //Time
-use std::time::Instant;
+use tokio::time::Instant;
 
 //Serialize module
 use crate::serialization::load_deserialize;
@@ -27,14 +28,22 @@ use crate::serialization::save_persistent;
 use crate::serialization::serialize_state;
 use crate::serialization::PersistentConsumerState;
 use crate::serialization::PersistentProducerState;
+use crate::serialization::PartialPersistentConsumerProducerState;
 use crate::serialization::PersistentTask;
 use crate::serialization::SerdeState;
+use crate::serialization::PartialPersistentTask;
+use crate::serialization::PersistentPushChan;
+use crate::serialization::PersistentPullChan;
 
 //Consumer module
 use crate::consumer::ConsumerState;
 
 //Producer module
 use crate::producer::ProducerState;
+
+//Consumer_producer module
+use crate::consumer_producer::ConsumerProducerState;
+use crate::consumer_producer::PartialConsumerProducerState;
 
 //Channel module
 use crate::channel::channel;
@@ -57,15 +66,16 @@ pub enum ManagerToTaskMessage {
 
 //Manager state with channels used for commincation between the operators and manager operator
 pub struct Manager {
-    state_chan_push: PushChan<TaskToManagerMessage>,
-    state_chan_pull: PullChan<TaskToManagerMessage>,
-    marker_chan_vec: Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>,
+    state_chan_push: PushChan<PersistentTaskToManagerMessage>,
+    state_chan_pull: PullChan<PersistentTaskToManagerMessage>,
+    marker_chan_hash: HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)>,//Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>,
     serde_state: SerdeState,
 }
 
 #[derive(Debug)]
-pub enum TaskToManagerMessage {
-    Serialise(Task, oneshot::Sender<u64>),
+pub enum PersistentTaskToManagerMessage {
+    Serialise(PartialPersistentTask, i32, oneshot::Sender<u64>),
+    Benchmarking(oneshot::Sender<u64>),
 }
 
 #[derive(Debug, Clone)]
@@ -73,12 +83,13 @@ pub enum Task {
     Consumer(ConsumerState),
     Producer(ProducerState),
     ConsumerProducer(ConsumerProducerState),
+    PartialConsumerProducer(PartialConsumerProducerState),
 }
 
 #[derive(Debug)]
 pub struct Context {
     pub marker_manager_recv: Option<PullChan<Event<()>>>,
-    pub state_manager_send: PushChan<TaskToManagerMessage>,
+    pub state_manager_send: PushChan<PersistentTaskToManagerMessage>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
@@ -104,7 +115,8 @@ impl Task {
         match self {
             Task::Consumer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
             Task::Producer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
-            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
+            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized_unrestricted(ctx)),
+            Task::PartialConsumerProducer(_) => todo!(),
         }
     }
 }
@@ -118,7 +130,7 @@ impl Manager {
         let mut serde_state = SerdeState {
             serialised: HashSet::new(),
             deserialised: HashMap::new(),
-            persistent_task_vec: Vec::new(),
+            persistent_task_map: HashMap::new(), 
         };
 
         let mut serialize_task_vec: Vec<Task> = Vec::new(); //given to the serialize function
@@ -127,17 +139,16 @@ impl Manager {
         let mut operator_spawn_vec = spawn_operators(&mut self, operator_connections).await;
         let mut operator_amount = operator_spawn_vec.len();
         let mut operator_counter = 0;
+        let mut marker_id = 1;
+        let mut partial_snapshot_hashset: HashMap<i32, Vec<PartialPersistentConsumerProducerState>> = HashMap::new();
 
-        //Giving permission for message creation in producers
-        //self.send_messages(30).await;
-        //Sending markers to the producers
+        
         let mut timer_now = Instant::now();
-        //self.send_markers().await;
-
-        //self.send_messages_markers(10).await;
+        let mut total_time = Instant::now();
         let mut benchmarking_timer_iteration: VecDeque<f64> = VecDeque::new();
-        let mut benchmarking_timer_Serialization: VecDeque<f64> = VecDeque::new();
         let mut benchmarking_counter = 0;
+        let mut old_highest_marker = 0;
+        let mut sink_node_done = 0;
         loop {
             if(benchmarking_timer_iteration.len() == 10){
                 benchmarking_timer_iteration.pop_front();
@@ -149,12 +160,16 @@ impl Manager {
             println!("Sending new messages with marker.");
             if(benchmarking_timer_iteration.len() < 5){
                 //self.send_messages_markers(100).await;
-                self.send_message_both_ways(200).await;                
+                self.send_message_both_ways(200, &mut marker_id).await;         
+                //self.send_message_both_ways(1000, &mut marker_id).await;
+                //self.send_message_one_way(300,&mut marker_id).await;
+                //self.send_message_test(500, &mut marker_id).await;
             }
             else {
                 //self.send_messages_markers_inverted(30000).await;
                 //self.send_messages_markers(100).await;
-                self.send_message_both_ways(200).await;
+                self.send_last_message().await;
+                
             }
             loop {
                 tokio::select! {
@@ -172,7 +187,6 @@ impl Manager {
                             serialize_task_vec = load_deserialize(loaded_checkpoint, &mut serde_state.deserialised).await; //deserialized checkpoint vec
                             println!("Loaded serialize_task_vec: {:?}",serialize_task_vec);
                             operator_spawn_vec = respawn_operator(&mut self, serialize_task_vec).await; //respawning task operators
-
                             break;
                         }
                         else {
@@ -181,104 +195,150 @@ impl Manager {
                     },
                     msg = self.state_chan_pull.pull_manager() => {
                         match msg {
-                            TaskToManagerMessage::Serialise(state, promise) => {
+                            PersistentTaskToManagerMessage::Serialise(state, m_id, promise) => {
                                 snapshot_timeout_counter = 0;
                                 operator_counter +=1;
                                 promise.send(8);
-                                let persistent_task = state.to_persistent_task(&mut serde_state).await;
-
-                                serde_state.persistent_task_vec.push(persistent_task);
+                                populate_persistent_task_map(state.clone(), m_id, &mut serde_state.persistent_task_map, &mut partial_snapshot_hashset).await;
                                 
-                                //persistent_task.push_to_vec(&mut serialize_task_vec).await;// <-- remove and change to persistent_task_vec?
-                                                    
-                                if (operator_amount == operator_counter){ //change operator_counter TO -> serde_state.persistent_task_vec.len()?
+                                if (serde_state.persistent_task_map.get(&m_id).unwrap().len() == operator_amount){
                                     benchmarking_counter += 1;
-                                    serialize_state(&mut serde_state).await;
-                                    benchmarking_timer_Serialization.push_back(timer_now.elapsed().as_millis() as f64);
+                                    if (m_id > old_highest_marker){
+                                        serialize_state(serde_state.persistent_task_map.get(&m_id).unwrap()).await;
+                                        //self.reset_values(...);
+                                        println!("Whole vector element without the last yet: {:?}, elapsed time: {:?}", benchmarking_timer_iteration, timer_now.elapsed().as_millis());
 
-                                    self.reset_values(&mut operator_amount, operator_spawn_vec.len(), &mut operator_counter, &mut snapshot_timeout_counter, &mut serde_state).await;
+                                        old_highest_marker = m_id;
+                                    }
+
+                                    //removing the saved checkpoint from the hashmap!
+                                    serde_state.persistent_task_map.remove_entry(&m_id);
+                                    partial_snapshot_hashset.remove_entry(&m_id);
+
                                     if(benchmarking_counter == 8){
-                                        benchmarking_counter = 0;
                                         let timer_now = timer_now.elapsed().as_millis();
                                         benchmarking_timer_iteration.push_back(timer_now as f64);
+                                        benchmarking_counter = 0;
+                                        let timer_avg = average(benchmarking_timer_iteration.clone());
+                                        println!("Time for all of the iterations: {:?}, the average: {:?}", benchmarking_timer_iteration, timer_avg);
                                         break;
                                     }
-                                }
+                                }                                
+                        }
+                        PersistentTaskToManagerMessage::Benchmarking(promise) => {
+                            sink_node_done += 1;
+                            if (sink_node_done == 2){
+                                println!("Total runtime: {:?}.\nBenchmarking times in each iteration: {:?}", total_time.elapsed().as_millis(), benchmarking_timer_iteration);
+                                promise.send(sink_node_done-1);
+                                task::sleep(Duration::from_secs(1000)).await;
                             }
-                        };
-                    },
-                }
+                            else{
+                                promise.send(sink_node_done-1);
+                            }
+                            
+                        },
+                    };
+                },
             }
-        }
+        } 
+    }   
     }
-    async fn send_markers(&self) {
-        //sending markers to the source-producers
-        for marker_chan in &self.marker_chan_vec {
-            marker_chan.0.push(Event::Marker).await;
-        }
-        println!("Done sending the markers to source-producers.");
-    }
-    async fn send_messages(&self, amount: i32) {
-        //Giving permission to Producers to create and send X amount of messages to connected operators.
-        for prod_chan in &self.marker_chan_vec {
-            prod_chan.0.push(Event::MessageAmount(amount)).await;
-        }
-        println!("Done sending the permission to produce messages all producers.");
+    
+    async fn send_message_test(&self, amount: i32, marker_id: &mut i32){
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id)).await;
+
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id)).await;
+
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id)).await;
+
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
+
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
+
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
+        println!("DONE SENDING LAST MESSAGE!");
     }
 
-    async fn send_messages_markers(&self, amount: i32) {
-        //Giving permission to Producers to create and send X amount of messages to connected operators.
-        for n in 0..6{
-            //let loc_amount = amount * 2;//(n as i32 + 1);
-            self.marker_chan_vec[0].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[0].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[1].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[1].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[2].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[2].0.push(Event::Marker).await;
-        }
-        println!("Done sending the permission to produce messages all producers.");
-    }
-
-    async fn send_messages_markers_inverted(&self, amount: i32) {
-        //Giving permission to Producers to create and send X amount of messages to connected operators.
-        for n in 0..6{
-            self.marker_chan_vec[0].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[0].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[1].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[1].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[2].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[2].0.push(Event::Marker).await;
-        }
-        println!("Done sending the permission to produce messages all producers.");
-    }
-
-
-    async fn send_message_both_ways(&self, amount: i32) { 
+    async fn send_message_one_way(&self, amount: i32, marker_id: &mut i32) {
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        println!("MARKER_KEYS: {:?}", marker_keys);
         for n in 0..4{
-            self.marker_chan_vec[0].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[0].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[1].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[1].0.push(Event::Marker).await;
-            
-            self.marker_chan_vec[2].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[2].0.push(Event::Marker).await;
 
-
-            self.marker_chan_vec[0].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[0].0.push(Event::Marker).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_vec[1].0.push(Event::MessageAmount(amount*2)).await;
-            self.marker_chan_vec[1].0.push(Event::Marker).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_vec[2].0.push(Event::MessageAmount(amount)).await;
-            self.marker_chan_vec[2].0.push(Event::Marker).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
         }
+        *marker_id += 4;
+    }
+
+    async fn send_message_both_ways(&self, amount: i32, marker_id: &mut i32) {
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        println!("MARKER_KEYS: {:?}", marker_keys);
+        for n in 0..4{
+
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            *marker_id += 1;
+        
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+        }
+        *marker_id += 4;
+    }
+
+    async fn send_test(&self, amount: i32, marker_id: &mut i32){
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        println!("MARKER_KEYS: {:?}", marker_keys);
+        
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id)).await;
+        
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id)).await;
+        
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount+3)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id)).await;
+        println!("DONE SENDING MESSAGES AND MARKERS!");
+    }
+
+    async fn send_last_message(&self){
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(0)).await;
+        
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(0)).await;
+        
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(0)).await;
+        println!("DONE SENDING LAST MESSAGE!");
     }
 
     async fn reset_values(&self, operator_amount: &mut usize, operator_spawn_vec_len: usize, operator_counter: &mut usize, snapshot_timeout_counter: &mut i32, serde_state: &mut SerdeState) {
@@ -286,7 +346,7 @@ impl Manager {
         *operator_counter = 0;
         *snapshot_timeout_counter = 0;
         //self.state_chan_pull.clear_pull_chan().await; //enable after benchmarking
-        serde_state.persistent_task_vec.clear();
+        //serde_state.persistent_task_vec.clear();
         serde_state.deserialised.clear();
         serde_state.serialised.clear();
     }
@@ -305,36 +365,29 @@ pub async fn spawn_operators(
     let mut task_op_spawn_vec = Vec::new();
     let mut marker_vec_counter = 0;
 
-    //creating push and pull channels. Assigning push channels to producer and consumerProducer operators
-    init_channels(
+    init_channels_modified(
         &operator_connections,
         &mut operator_channel,
         &mut operator_state_chan,
-    )
-    .await;
-
-    //Assigning pull channels to consumer and consumerProducer operators.
-    init_pull_channels(
+    ).await;
+    let mut operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = init_channels_modified(
         &operator_connections,
         &mut operator_channel,
         &mut operator_state_chan,
-    )
-    .await;
+    ).await;
+    let mut all_operators: HashSet<Operators> = all_graph_operators(operator_connections).await;
 
     //spawning the tasks
-    for operator in &operator_state_chan {
-        match operator.0 {
-            Operators::SourceProducer(_) => {
-                let chan =
-                    operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
-                        .await;
+    for operator in all_operators {
+        match operator { //SourceProducer(0)
+            Operators::SourceProducer(operator_id) => {
                 let prod_state = ProducerState::S0 {
-                    out0: chan[0].to_owned(),
+                    out0: operator_pullpush.get(&(operator, Operators::ConsumerProducer(0))).unwrap().0.to_owned(),
                     count: 0,
                 };
                 let prod_ctx = Context {
                     marker_manager_recv: Some(
-                        self_manager.marker_chan_vec[marker_vec_counter].1.clone(),
+                        self_manager.marker_chan_hash.get(&operator_id).unwrap().1.clone(),
                     ),
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
@@ -343,9 +396,8 @@ pub async fn spawn_operators(
                 marker_vec_counter += 1;
             }
             Operators::Consumer(_) => {
-                let in_chan =  operator_channel_to_pull_vec(operator_state_chan.get(operator.0).unwrap()).await;
                 let cons_state = ConsumerState::S0 {
-                    stream0: in_chan[0].to_owned(),
+                    stream0: operator_pullpush.get(&(Operators::ConsumerProducer(0),operator)).unwrap().1.to_owned(),
                     count: 0,
                 };
                 let cons_ctx = Context {
@@ -356,18 +408,12 @@ pub async fn spawn_operators(
                 task_op_spawn_vec.push(cons_task.spawn(cons_ctx));
             }
             Operators::ConsumerProducer(_) => {
-                let in_chan =
-                    operator_channel_to_pull_vec(operator_state_chan.get(operator.0).unwrap())
-                        .await;
-                let out_chan =
-                    operator_channel_to_push_vec(operator_state_chan.get(operator.0).unwrap())
-                        .await;
                 let cons_prod_state = ConsumerProducerState::S0 {
-                    stream0: in_chan[0].to_owned(),
-                    stream1: in_chan[1].to_owned(),
-                    stream2: in_chan[2].to_owned(),
-                    out0: out_chan[0].to_owned(),
-                    out1: out_chan[1].to_owned(),
+                    stream0: operator_pullpush.get(&(Operators::SourceProducer(0),operator.clone())).unwrap().1.to_owned(),
+                    stream1: operator_pullpush.get(&(Operators::SourceProducer(1),operator.clone())).unwrap().1.to_owned(),
+                    stream2: operator_pullpush.get(&(Operators::SourceProducer(2),operator.clone())).unwrap().1.to_owned(),
+                    out0: operator_pullpush.get(&(operator.clone(), Operators::Consumer(0))).unwrap().0.to_owned(),
+                    out1: operator_pullpush.get(&(operator.clone(), Operators::Consumer(1))).unwrap().0.to_owned(),
                     count: 0,
                 };
                 let cons_prod_ctx = Context {
@@ -382,89 +428,26 @@ pub async fn spawn_operators(
     task_op_spawn_vec
 }
 
-async fn init_channels(
+async fn init_channels_modified(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
     operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
-) {
+) -> HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)>{
     //creating channels for source producers and consumer_producers. Every prod/con_prod will have a separate channel with connected operator
     //create as a new func?
-    for connection in operator_connections {
-        let chan_vec = channel_vec::<Event<i32>>(connection.1.clone().len());
-        operator_channel.insert(connection.0.to_owned(), chan_vec);
-    }
-    init_operator_push_channels(operator_connections, operator_channel, operator_state_chan).await;
-}
+    let mut latest_operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = HashMap::new();
 
-async fn init_operator_push_channels(
-    operator_connections: &HashMap<Operators, Vec<Operators>>,
-    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
-    operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
-) {
-    println!("operator_connections: {:#?}", operator_connections);
-    println!("operator_channel: {:#?}",operator_channel);
-    println!("operator_state_chan: {:#?}",operator_state_chan);
     for connection in operator_connections {
-        //Producer/ConsumerProducer operator_state_chan is given X amount of push for each connected channel in graph.
-        let key_chan = operator_channel.get(connection.0).unwrap().clone();
-        let mut operator_prod_push_vec: Vec<OperatorChannels> = Vec::new();
-        for chan in key_chan {
-            operator_prod_push_vec.push(OperatorChannels::Push(chan.0));
-        }
-        operator_state_chan.insert(connection.0.to_owned(), operator_prod_push_vec);
-    }
-}
-
-async fn init_pull_channels(
-    operator_connections: &HashMap<Operators, Vec<Operators>>,
-    operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
-    operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
-) {
-    //Giving pull channels to the consumer and consumerProducer operators
-    for connection in operator_connections {
-        println!("operator_state_chan: {:?}", operator_state_chan);
-
-        //going through the vector in the value of hashmap
         let mut count = 0;
-        for connection_val in connection.1 {
-            match connection_val {
-                Operators::SourceProducer(_) => {
-                    println!("This should not happen, ERROR!");
-                    panic!();
-                }
-                Operators::Consumer(_) => {
-                    if operator_state_chan.contains_key(&connection_val) {
-                        //add a new chan to the vector and update the vector
-                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
-                        operator_state_chan
-                            .entry(connection_val.to_owned())
-                            .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
-                    } else {
-                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
-                        operator_state_chan.insert(
-                            connection_val.to_owned(),
-                            vec![OperatorChannels::Pull(val_chan)],
-                        );
-                    }
-                }
-                Operators::ConsumerProducer(_) => {
-                    if operator_state_chan.contains_key(&connection_val) {
-                        //add a new chan to the vector and update the vector
-                        let val_chan = operator_channel.get(connection.0).unwrap()[count].1.clone();
-                        operator_state_chan
-                            .entry(connection_val.to_owned())
-                            .and_modify(|e| e.push(OperatorChannels::Pull(val_chan)));
-                    } else {
-                        //There should always be an entry in the hashmap due of init_operator_push_channels
-                        println!("This should not happen, ERROR!");
-                        panic!();
-                    }
-                }
-            }
+        let chan_vec = channel_vec::<Event<i32>>(connection.1.clone().len());
+        for operator_connection_value in connection.1{
+            latest_operator_pullpush.insert((connection.0.clone(), operator_connection_value.clone()), chan_vec[count].to_owned());
             count += 1;
         }
     }
+    latest_operator_pullpush
 }
+
 
 async fn operator_channel_to_pull_vec(
     operator_chan: &Vec<OperatorChannels>,
@@ -507,10 +490,11 @@ async fn respawn_operator(
                 };
                 task.spawn(cons_ctx)
             }
-            Task::Producer(_) => {
+            Task::Producer(operator_id) => {
                 let prod_ctx = Context {
                     marker_manager_recv: Some(
-                        self_manager.marker_chan_vec[marker_vec_counter].1.clone(),
+                        panic!(), // FIX THE OPERATOR_ID !!!!!!!!!!!!!!!!!!!!!!!!! should be similar to how its during initial creation/spawning
+                        //self_manager.marker_chan_hash.get(todo!()).unwrap().1.clone(), //todo!() should be replaced with operator_id
                     ),
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
@@ -524,6 +508,7 @@ async fn respawn_operator(
                 };
                 task.spawn(cons_prod_ctx)
             }
+            Task::PartialConsumerProducer(_) => todo!(),
         };
         handle_vec.push(handle);
     }
@@ -532,17 +517,19 @@ async fn respawn_operator(
 
 fn create_marker_chan_vec(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
-) -> Vec<(PushChan<Event<()>>, PullChan<Event<()>>)> {
-    let mut counter = 0;
+) -> HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)>{//Vec<(PushChan<Event<()>>, PullChan<Event<()>>)> {
+    let mut marker_hash:HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)> = HashMap::new();
     for operator in operator_connections {
         match operator.0 {
-            Operators::SourceProducer(_) => counter += 1, 
+            Operators::SourceProducer(n) => {
+                let temp_chan_vec = channel_vec::<Event<()>>(1).pop().unwrap();
+                marker_hash.insert(*n, temp_chan_vec);
+            }, 
             Operators::Consumer(_) => {}
             Operators::ConsumerProducer(_) => {}
         }
     }
-
-    channel_vec::<Event<()>>(counter)
+    marker_hash
 }
 
 pub fn manager() {
@@ -550,35 +537,43 @@ pub fn manager() {
 
     //creating the dataflow graph
     operator_connections.insert(
-        Operators::SourceProducer(1),
-        vec![Operators::ConsumerProducer(1)],
+        Operators::SourceProducer(0), 
+        vec![Operators::ConsumerProducer(0)],
     );
     operator_connections.insert(
-        Operators::SourceProducer(2),
-        vec![Operators::ConsumerProducer(1)],
+        Operators::SourceProducer(1), 
+        vec![Operators::ConsumerProducer(0)],
     );
     operator_connections.insert(
-        Operators::SourceProducer(3),
-        vec![Operators::ConsumerProducer(1)],
+        Operators::SourceProducer(2), 
+        vec![Operators::ConsumerProducer(0)],
     );
-    operator_connections.insert(Operators::ConsumerProducer(1), vec![Operators::Consumer(1)]);
-    operator_connections.entry(Operators::ConsumerProducer(1)).and_modify(|e| { e.push(Operators::Consumer(2)) }).or_insert(vec![Operators::Consumer(2)]);
+    operator_connections.insert(
+        Operators::ConsumerProducer(0), 
+        vec![Operators::Consumer(0)]
+    );
+    operator_connections.entry(
+        Operators::ConsumerProducer(0))
+        .and_modify(|e| 
+            { e.push(Operators::Consumer(1)) })
+        .or_insert(vec![Operators::Consumer(1)]
+    );
 
 
     println!("TEST OPERATOR_CONNECTIONS: {:?}", operator_connections);
 
     //push: from the operator to the manager(fe, state), filling the buffer
     //pull: manager can pull from the buffer
-    let (state_push, state_pull) = channel::<TaskToManagerMessage>();
+    let (state_push, state_pull) = channel::<PersistentTaskToManagerMessage>();
 
-    let (marker_push, marker_pull) = channel::<Event<()>>();
+    //let (marker_push, marker_pull) = channel::<Event<()>>();
 
-    let marker_vec = create_marker_chan_vec(&operator_connections);
+    let marker_hash:HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)> = create_marker_chan_vec(&operator_connections); //HASHMAP TEX: {operator_nummer, (push/pull)} . {nummer, tupple}
 
     let manager_state = Manager {
         state_chan_push: state_push, //channel for operator state, operator -> buffer
         state_chan_pull: state_pull, //channel for operator state, buffer -> manager
-        marker_chan_vec: marker_vec, //all source producer marker channels
+        marker_chan_hash: marker_hash, //all source producer marker channels
         serde_state: SerdeState::default(), //for serialization and deserialization
     };
     async_std::task::spawn(manager_state.run(operator_connections));
@@ -593,4 +588,89 @@ fn average(numbers: VecDeque<f64>) -> f64 {
     }
     let avrg = sum / nnumbers;
     avrg
+}
+
+
+pub fn partial_to_persistent(p_0:PartialPersistentConsumerProducerState, p_1:PartialPersistentConsumerProducerState) -> PersistentConsumerProducerState{
+    let mut p_state:PersistentConsumerProducerState;
+    let loc_p_0 = p_0.clone();
+    let loc_p_1 = p_1.clone();
+    match p_0 {
+        PartialPersistentConsumerProducerState::S0 { stream0, stream1, out0 } => {
+            match p_1 {
+                PartialPersistentConsumerProducerState::S0 { stream0, stream1, out0 } => panic!(),
+                PartialPersistentConsumerProducerState::S1 { stream0, stream1, out0, data } => panic!(),
+                PartialPersistentConsumerProducerState::S2 { stream2, out1 } => {
+                    p_state = PersistentConsumerProducerState::S0 { stream0, stream1, stream2, out0, out1, count: 0 };//remove count
+                },
+            }
+        },
+        PartialPersistentConsumerProducerState::S1 { stream0, stream1, out0, data } => {
+            match p_1 {
+                PartialPersistentConsumerProducerState::S0 { stream0, stream1, out0 } => panic!(),
+                PartialPersistentConsumerProducerState::S1 { stream0, stream1, out0, data } => panic!(),
+                PartialPersistentConsumerProducerState::S2 { stream2, out1 } => {
+                    p_state = PersistentConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count: 0, data };//remove count
+                },
+            }
+        },
+        PartialPersistentConsumerProducerState::S2 { stream2, out1 } => {
+            p_state = partial_to_persistent(loc_p_1, loc_p_0);
+        },
+    }
+    p_state
+}
+
+pub async fn  populate_persistent_task_map(state: PartialPersistentTask, m_id: i32, persistent_task_map: &mut HashMap<i32, Vec<PersistentTask>>, partial_snapshot_hashset: &mut HashMap<i32, Vec<PartialPersistentConsumerProducerState>>) {
+    match state {
+        PartialPersistentTask::Consumer(p_state) => {
+            match persistent_task_map.get_mut(&m_id) {
+                Some(persistent_vec) => persistent_vec.push(PersistentTask::Consumer(p_state)),
+                None => {
+                    persistent_task_map.insert(m_id, vec![PersistentTask::Consumer(p_state)]);
+                },
+            }
+        },
+        PartialPersistentTask::Producer(p_state) => 
+        match persistent_task_map.get_mut(&m_id) {
+            Some(persistent_vec) => persistent_vec.push(PersistentTask::Producer(p_state)),
+            None => {
+                persistent_task_map.insert(m_id, vec![PersistentTask::Producer(p_state)]);
+            },
+        },
+        PartialPersistentTask::ConsumerProducer(p_state) => 
+            match persistent_task_map.get_mut(&m_id) {
+                Some(persistent_vec) => persistent_vec.push(PersistentTask::ConsumerProducer(p_state)),
+                None => {
+                    persistent_task_map.insert(m_id, vec![PersistentTask::ConsumerProducer(p_state)]);
+                },
+            },
+        PartialPersistentTask::PartialConsumerProducer(p_state) => 
+        match partial_snapshot_hashset.get_mut(&m_id) { //check if a partial snapshot exists
+            Some(p_vec) => {//Insert the second value and combine them.
+                p_vec.push(p_state); 
+
+                let persistent_consumer_producer_state = partial_to_persistent(p_vec[0].clone(), p_vec[1].clone());
+
+                match persistent_task_map.get_mut(&m_id) {//check if the marker column exists in persistent_task_map.
+                    Some(persistent_vec) => persistent_vec.push(PersistentTask::ConsumerProducer(persistent_consumer_producer_state)), //it does, and simply pushed the state into it
+                    None => {persistent_task_map.insert(m_id, vec![PersistentTask::ConsumerProducer(persistent_consumer_producer_state)]);}, //it does not, create a vec and push the state
+                }
+            },
+            None => {//hashset is empty, insert the first partial snapshot
+                partial_snapshot_hashset.insert(m_id, vec![p_state]);
+            },
+        },
+    }
+}
+
+pub async fn all_graph_operators (operator_connections:HashMap<Operators, Vec<Operators>>) -> HashSet<Operators>{
+    let mut all_operators: HashSet<Operators> = HashSet::new();
+    for operators in operator_connections{
+        all_operators.insert(operators.0);
+        for operator_in_val in operators.1 {
+            all_operators.insert(operator_in_val);
+        }
+    }
+    all_operators
 }
