@@ -365,11 +365,6 @@ pub async fn spawn_operators(
     let mut task_op_spawn_vec = Vec::new();
     let mut marker_vec_counter = 0;
 
-    init_channels_modified(
-        &operator_connections,
-        &mut operator_channel,
-        &mut operator_state_chan,
-    ).await;
     let mut operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = init_channels_modified(
         &operator_connections,
         &mut operator_channel,
