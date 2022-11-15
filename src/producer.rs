@@ -3,6 +3,7 @@ use serde::{Deserializer, Serializer};
 
 use std::collections::HashSet;
 
+use std::hash::Hash;
 use std::time::Duration;
 use tokio::time;
 
@@ -35,7 +36,7 @@ use crate::shared::Event;
 #[derive(Debug, Clone)]
 pub enum ProducerState {
     S0 {
-        out0: PushChan<Event<i32>>,
+        out0: PushChan<Event<(u64, u64)>>,
         count: i32,
     },
 }
@@ -64,28 +65,23 @@ impl ProducerState {
 
                             snapshot_state
                         }
-                        Event::MessageAmount(amount) => {
+                        Event::MessageAmount((message_type, amount)) => {
                             let mut loc_count = count; 
-                            let mut delay_time = 0;
-                            if (amount == 0) {
-                                out0.push(Event::Data(0)).await;
-                                println!("PRODUCER DONE--------------------");
+                            if(message_type == "taxi_customer".to_string()) {
+                                    send_message(&out0, amount, &mut loc_count).await;
                             }
-                            else {
-                                if(amount == 200){
-                                    delay_time = 10;
+                            else if (message_type == "taxi_driver".to_string()) {
+                                    send_message(&out0, amount, &mut loc_count).await;
                                 }
-                                else{
-                                    delay_time = 20;
+                                else if (message_type == "bus".to_string()) {
+                                    println!("sending bus");
+                                    send_message(&out0, amount, &mut loc_count).await;
                                 }
-                                for x in 0..amount {
-                                    //println!("sending data");
-                                    task::sleep(Duration::from_millis(delay_time)).await;
-                                    out0.push(Event::Data(2)).await;
-                                    loc_count += 1;
-                                    
+                                else if (message_type == "end_of_stream") {
+                                    out0.push(Event::Data((0, 0))).await;
+                                    println!("PRODUCER DONE--------------------");
                                 }
-                            }
+                            
                             ProducerState::S0 {
                                 out0,
                                 count: loc_count,
@@ -96,6 +92,21 @@ impl ProducerState {
             }
         }
     }
+}
 
-    
+pub async fn send_message(out: &PushChan<Event<(u64, u64)>>, amount: i32, count: &mut i32){ 
+    let mut loc_count = *count;
+    let mut data_counter:u64 = 1;
+    for _ in 0..amount {
+        let data = Event::Data((data_counter, data_counter + 1));
+        out.push(data).await;
+        loc_count += 1; 
+        if (data_counter == 130){
+            data_counter = 1;
+        }
+        else {
+            data_counter += 1;
+        }
+    }
+    *count = loc_count; 
 }

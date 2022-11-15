@@ -122,14 +122,7 @@ pub fn channel_vec<T>(amount: usize) -> Vec<(PushChan<T>, PullChan<T>)> { //ORIG
     }
     chan_vec
 }
-pub fn channel_vec_modified<T>(amount_vec: Vec<i32>) -> Vec<(PushChan<T>, PullChan<T>)> {
-    let mut chan_vec: Vec<(PushChan<T>, PullChan<T>)> = Vec::new();
-    for n in amount_vec {
-        let chan = Arc::new(Chan::new(CAPACITY));
-        chan_vec.push((PushChan(chan.clone()), PullChan(chan)));
-    }
-    chan_vec
-}
+
 
 //channel for manager, the operators will be able to send and receive messages(marker, ) to manager
 pub fn channel_manager<T,G>() -> (PushChan<T>, PullChan<G>) {

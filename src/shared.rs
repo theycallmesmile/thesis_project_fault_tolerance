@@ -1,4 +1,5 @@
 use core::panic;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,7 @@ use crate::consumer_producer::ConsumerProducerState;
 pub enum Event<T> {
     Data(T),
     Marker(i32),
-    MessageAmount(i32),
+    MessageAmount((String, i32)),
 }
 
 pub enum SharedState {
@@ -80,6 +81,4 @@ impl<T> Shared<T> {
         let result = recv.await;
         println!("RECEIVED PROMISE: {}", result.unwrap());
     }
-
-
 }

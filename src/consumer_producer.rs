@@ -4,6 +4,7 @@ use serde::{Deserializer, Serializer};
 use core::panic;
 use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::time::Duration;
 use tokio::time;
 use tokio::time::Instant;
@@ -33,28 +34,28 @@ use crate::shared::SharedState;
 #[derive(Debug, Clone)]
 pub enum ConsumerProducerState {
     S0 {
-        stream0: PullChan<Event<i32>>,
-        stream1: PullChan<Event<i32>>,
-        stream2: PullChan<Event<i32>>,
-        out0: PushChan<Event<i32>>,
-        out1: PushChan<Event<i32>>,
+        stream0: PullChan<Event<(u64, u64)>>,
+        stream1: PullChan<Event<(u64, u64)>>,
+        stream2: PullChan<Event<(u64, u64)>>,
+        out0: PushChan<Event<(String, String)>>,
+        out1: PushChan<Event<(String, String)>>,
         count: i32,
     },
     S1 {
-        stream0: PullChan<Event<i32>>,
-        stream1: PullChan<Event<i32>>,
-        stream2: PullChan<Event<i32>>,
-        out0: PushChan<Event<i32>>,
-        out1: PushChan<Event<i32>>,
+        stream0: PullChan<Event<(u64, u64)>>,
+        stream1: PullChan<Event<(u64, u64)>>,
+        stream2: PullChan<Event<(u64, u64)>>,
+        out0: PushChan<Event<(String, String)>>,
+        out1: PushChan<Event<(String, String)>>,
         count: i32,
-        data: i32,
+        data: (u64, u64),
     },
     S2 {
-        stream0: PullChan<Event<i32>>,
-        stream1: PullChan<Event<i32>>,
-        stream2: PullChan<Event<i32>>,
-        out0: PushChan<Event<i32>>,
-        out1: PushChan<Event<i32>>,
+        stream0: PullChan<Event<(u64, u64)>>,
+        stream1: PullChan<Event<(u64, u64)>>,
+        stream2: PullChan<Event<(u64, u64)>>,
+        out0: PushChan<Event<(String, String)>>,
+        out1: PushChan<Event<(String, String)>>,
         count: i32,
     },
 }
@@ -62,19 +63,19 @@ pub enum ConsumerProducerState {
 #[derive(Debug, Clone)]
 pub enum PartialConsumerProducerState {
     S0 {
-        stream0: PullChan<Event<i32>>,
-        stream1: PullChan<Event<i32>>,
-        out0: PushChan<Event<i32>>,
+        stream0: PullChan<Event<(u64, u64)>>,
+        stream1: PullChan<Event<(u64, u64)>>,
+        out0: PushChan<Event<(String, String)>>,
     },
     S1 {
-        stream0: PullChan<Event<i32>>,
-        stream1: PullChan<Event<i32>>,
-        out0: PushChan<Event<i32>>,
-        data: i32,
+        stream0: PullChan<Event<(u64, u64)>>,
+        stream1: PullChan<Event<(u64, u64)>>,
+        out0: PushChan<Event<(String, String)>>,
+        data: (u64, u64),
     },
     S2 {
-        stream2: PullChan<Event<i32>>,
-        out1: PushChan<Event<i32>>,
+        stream2: PullChan<Event<(u64, u64)>>,
+        out1: PushChan<Event<(String, String)>>,
     },
 }
 
@@ -148,12 +149,15 @@ impl ConsumerProducerState {
 
                     match in_event1 {
                         Event::Data(event_data_s1) => {
-                            if(event_data_s1 == 0){
-                                out0.push(Event::Data(0)).await;
+                            if(event_data_s1.0 == 0){
+                                out0.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))).await;
                                 println!("CONSUMER_PRODUCER STREAM0&1 DONE!");
                             }
-                            else {
-                                out0.push(Event::Data(data.clone() + event_data_s1)).await;
+                            else { 
+                                let (valid, locations) = return_location(data, Some(event_data_s1), &ctx.areas).await;
+                                if(valid) {
+                                    out0.push(Event::Data((locations.0, locations.1))).await;
+                                }      
                             }
                             ConsumerProducerState::S2 {
                                 stream0,
@@ -207,13 +211,16 @@ impl ConsumerProducerState {
                     let in_event2 = stream2.pull_buff_log().await;
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            if(event_data_s2 == 0){
-                                out1.push(Event::Data(0)).await;
+                            if(event_data_s2.0 == 0){
+                                out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))).await;
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
                             }
-                            else {
-                                out1.push(Event::Data(event_data_s2)).await;
-                            }
+                            else { 
+                                let (valid, locations) = return_location(event_data_s2, None, &ctx.areas).await;
+                                if(valid) {
+                                    out1.push(Event::Data((locations.0, locations.1))).await;
+                                }      
+                            }                          
                             ConsumerProducerState::S0 {
                                 stream0,
                                 stream1,
@@ -315,15 +322,22 @@ impl ConsumerProducerState {
                     let in_event1 = stream1.pull_buff_log().await;
                     match in_event1 {
                         Event::Data(event_data_s1) => {
-                            if(event_data_s1 == 0){
+                            if(event_data_s1.0 == 0){
                                 println!("CONSUMER_PRODUCER STREAM0&1 DONE!");
                                 
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(0)));
+                                let next_state = join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
                                 next_state.0
                             }
                             else {
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(data.clone() + event_data_s1)));
-                                next_state.0
+                                let (valid, locations) = return_location(data, Some(event_data_s1), &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0.clone(), out1, count).await
+                                } 
+                                
                             } 
                         }
                         Event::Marker(marker_id) => {
@@ -363,17 +377,22 @@ impl ConsumerProducerState {
                     let in_event2 = stream2.pull_buff_log().await;
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            if(event_data_s2 == 0){
+                            println!("the data in consumer_producer: {:?}", event_data_s2);
+                            if(event_data_s2.0 == 0){
+                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
-                                
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(0)));
                                 next_state.0
                             }
                             else {
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(event_data_s2)));
-                                next_state.0
-                            } 
-                            
+                                let (valid, locations) = return_location(event_data_s2, None, &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0, out1.clone(), count).await
+                                } 
+                            }                             
                         }
                         Event::Marker(marker_id) => {
                             
@@ -392,7 +411,6 @@ impl ConsumerProducerState {
                             let persistent_state = Task::ConsumerProducer(snapshot_state.clone()).to_partial_persistent_task().await;
                             println!("start ConsumerProducer snapshotting");
                             Shared::<()>::persistent_store(persistent_state, marker_id, &ctx).await;
-
   
                             join!(out0.push(Event::Marker(marker_id)), out1.push(Event::Marker(marker_id)));
 
@@ -470,12 +488,15 @@ impl ConsumerProducerState {
                     let in_event1 = stream1.pull_buff_log().await;
                     match in_event1 {
                         Event::Data(event_data_s1) => {
-                            if(event_data_s1 == 0){
-                                out0.push(Event::Data(0)).await;
+                            if(event_data_s1.0 == 0){
+                                out0.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))).await;
                                 println!("CONSUMER_PRODUCER STREAM0&1 DONE!");
                             }
                             else {
-                                out0.push(Event::Data(data + event_data_s1)).await;
+                                let (valid, locations) = return_location(data, Some(event_data_s1), &ctx.areas).await;
+                                if(valid) {
+                                    out0.push(Event::Data((locations.0, locations.1))).await;
+                                }
                             }
                             ConsumerProducerState::S2 {
                                 stream0,
@@ -523,12 +544,15 @@ impl ConsumerProducerState {
                     let in_event2 = stream2.pull_buff_log().await;
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            if(event_data_s2 == 0){
-                                out1.push(Event::Data(0)).await;
+                            if(event_data_s2.0 == 0){
+                                out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))).await;
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
                             }
                             else {
-                                out1.push(Event::Data(event_data_s2)).await;
+                                let (valid, locations) = return_location(event_data_s2, None, &ctx.areas).await;
+                                if(valid) {
+                                    out1.push(Event::Data((locations.0, locations.1))).await;
+                                }
                             }
                             ConsumerProducerState::S0 {
                                 stream0,
@@ -662,19 +686,23 @@ impl ConsumerProducerState {
 
                     match in_event1 {
                         Event::Data(event_data_s1) => {                          
-                            if(event_data_s1 == 0){
+                            if(event_data_s1.0 == 0){
+                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
-                                
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(0)));
                                 next_state.0
                             }
                             else {
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(data.clone() + event_data_s1)));
-                                next_state.0
+                                let (valid, locations) = return_location(data, Some(event_data_s1), &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0.clone(), out1, count).await
+                                } 
                             }     
                         }
                         Event::Marker(marker_id) => {
-
                             let loc_stream0 = drain_buffers(&stream0).await;
 
                             let partial_snapshot_state = PartialConsumerProducerState::S1 {
@@ -736,15 +764,20 @@ impl ConsumerProducerState {
                     
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            if(event_data_s2 == 0){
+                            if(event_data_s2.0 == 0){
+                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
-                                
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(0)));
                                 next_state.0
                             }
                             else {
-                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(event_data_s2)));
-                                next_state.0
+                                let (valid, locations) = return_location(event_data_s2, None, &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0, out1.clone(), count).await
+                                }
                             }
                         }
                         Event::Marker(marker_id) => {
@@ -799,7 +832,14 @@ impl ConsumerProducerState {
     }
 }
 
-pub async fn race_next_state(stream0: PullChan<Event<i32>>, stream1: PullChan<Event<i32>>, stream2: PullChan<Event<i32>>, out0: PushChan<Event<i32>>, out1: PushChan<Event<i32>>, count: i32 ) -> ConsumerProducerState{
+pub async fn race_next_state(stream0: PullChan<Event<(
+    u64, 
+    u64)>>, 
+    stream1: PullChan<Event<(u64, u64)>>, 
+    stream2: PullChan<Event<(u64, u64)>>, 
+    out0: PushChan<Event<(String, String)>>, 
+    out1: PushChan<Event<(String, String)>>, 
+    count: i32 ) -> ConsumerProducerState {
     tokio::select! {
         _ = stream0.check_pull_length() => {
             ConsumerProducerState::S0 {
@@ -825,7 +865,7 @@ pub async fn race_next_state(stream0: PullChan<Event<i32>>, stream1: PullChan<Ev
     //println!("WINNER AFTER MARKER: {}", timer_now.elapsed().as_millis());
 }
 
-pub async fn drain_buffers(stream: &PullChan<Event<i32>>) -> PullChan<Event<i32>> {
+pub async fn drain_buffers(stream: &PullChan<Event<(u64, u64)>>,) -> PullChan<Event<(u64, u64)>> {
     loop {
         let in_event = stream.pull().await;
         match in_event {
@@ -840,4 +880,41 @@ pub async fn drain_buffers(stream: &PullChan<Event<i32>>) -> PullChan<Event<i32>
         }
     }
     stream.to_owned()
+}
+
+pub async fn get_location(id: u64, areas: &HashMap<u64, String>) -> String {
+    match areas.get(&id) {
+        Some(name) => name.to_owned(),
+        None => "".to_string(),
+    }
+}
+
+
+pub async fn return_location(in_0: (u64, u64), in_1_optional: Option<(u64, u64)>, areas: &HashMap<u64, String>) -> (bool, (String, String)){ 
+    match in_1_optional {
+        Some(in_1) => {
+            let location_names = join!(get_location(in_0.0, &areas), get_location(in_0.1, &areas), get_location(in_1.0, &areas), get_location(in_1.1, &areas));
+            let location_names_array = [&location_names.0, &location_names.1, &location_names.2, &location_names.3];
+            let mut valid = true;
+        
+            for validity in location_names_array {
+                if validity == &"".to_string() {
+                    valid = false;
+                }
+            }
+            (valid, (location_names.0, location_names.2))
+        },
+        None => {
+            let location_names = join!(get_location(in_0.0, &areas), get_location(in_0.1, &areas));
+            let location_names_array = [&location_names.0, &location_names.1];
+            let mut valid = true;
+        
+            for validity in location_names_array {
+                if validity == &"".to_string() {
+                    valid = false;
+                }
+            }
+            (valid, (location_names.0, location_names.1))
+        },
+    }    
 }

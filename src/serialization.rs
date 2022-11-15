@@ -64,7 +64,7 @@ pub enum PartialPersistentTask {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentProducerState {
     S0 {
-        output0: PersistentPushChan<Event<i32>>,
+        output0: PersistentPushChan<Event<(u64, u64)>>,
         count: i32,
     },
 }
@@ -72,7 +72,7 @@ pub enum PersistentProducerState {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentConsumerState {
     S0 {
-        input0: PersistentPullChan<Event<i32>>,
+        input0: PersistentPullChan<Event<(String, String)>>,
         count: i32,
     },
 }
@@ -80,28 +80,28 @@ pub enum PersistentConsumerState {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PersistentConsumerProducerState {
     S0 {
-        stream0: PersistentPullChan<Event<i32>>,
-        stream1: PersistentPullChan<Event<i32>>,
-        stream2: PersistentPullChan<Event<i32>>,
-        out0: PersistentPushChan<Event<i32>>,
-        out1: PersistentPushChan<Event<i32>>,
+        stream0: PersistentPullChan<Event<(u64, u64)>>,
+        stream1: PersistentPullChan<Event<(u64, u64)>>,
+        stream2: PersistentPullChan<Event<(u64, u64)>>,
+        out0: PersistentPushChan<Event<(String, String)>>,
+        out1: PersistentPushChan<Event<(String, String)>>,
         count: i32,
     },
     S1 {
-        stream0: PersistentPullChan<Event<i32>>,
-        stream1: PersistentPullChan<Event<i32>>,
-        stream2: PersistentPullChan<Event<i32>>,
-        out0: PersistentPushChan<Event<i32>>,
-        out1: PersistentPushChan<Event<i32>>,
+        stream0: PersistentPullChan<Event<(u64, u64)>>,
+        stream1: PersistentPullChan<Event<(u64, u64)>>,
+        stream2: PersistentPullChan<Event<(u64, u64)>>,
+        out0: PersistentPushChan<Event<(String, String)>>,
+        out1: PersistentPushChan<Event<(String, String)>>,
         count: i32,
-        data: i32,
+        data: (u64, u64),
     },
     S2 {
-        stream0: PersistentPullChan<Event<i32>>,
-        stream1: PersistentPullChan<Event<i32>>,
-        stream2: PersistentPullChan<Event<i32>>,
-        out0: PersistentPushChan<Event<i32>>,
-        out1: PersistentPushChan<Event<i32>>,
+        stream0: PersistentPullChan<Event<(u64, u64)>>,
+        stream1: PersistentPullChan<Event<(u64, u64)>>,
+        stream2: PersistentPullChan<Event<(u64, u64)>>,
+        out0: PersistentPushChan<Event<(String, String)>>,
+        out1: PersistentPushChan<Event<(String, String)>>,
         count: i32,
     },
 }
@@ -109,19 +109,19 @@ pub enum PersistentConsumerProducerState {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PartialPersistentConsumerProducerState {
     S0 {
-        stream0: PersistentPullChan<Event<i32>>,
-        stream1: PersistentPullChan<Event<i32>>,
-        out0: PersistentPushChan<Event<i32>>,
+        stream0: PersistentPullChan<Event<(u64, u64)>>,
+        stream1: PersistentPullChan<Event<(u64, u64)>>,
+        out0: PersistentPushChan<Event<(String, String)>>,
     },
     S1 {
-        stream0: PersistentPullChan<Event<i32>>,
-        stream1: PersistentPullChan<Event<i32>>,
-        out0: PersistentPushChan<Event<i32>>,
-        data: i32,
+        stream0: PersistentPullChan<Event<(u64, u64)>>,
+        stream1: PersistentPullChan<Event<(u64, u64)>>,
+        out0: PersistentPushChan<Event<(String, String)>>,
+        data: (u64, u64),
     },
     S2 {
-        stream2: PersistentPullChan<Event<i32>>,
-        out1: PersistentPushChan<Event<i32>>,
+        stream2: PersistentPullChan<Event<(u64, u64)>>,
+        out1: PersistentPushChan<Event<(String, String)>>,
     },
 }
 
@@ -306,7 +306,6 @@ pub async fn load_deserialize(serialized_vec: String, ptr_vec_hashmap: &mut Hash
                     let loc_input2 = PullChan::from_persistent(stream2, ptr_vec_hashmap);
                     let loc_output0 = PushChan::from_persistent(out0, ptr_vec_hashmap);
                     let loc_output1 = PushChan::from_persistent(out1, ptr_vec_hashmap);
-                    println!("TESTBBB: {:?}", loc_input2);
                     tasks.push(Task::ConsumerProducer(ConsumerProducerState::S0 { stream0: loc_input0, stream1: loc_input1, stream2: loc_input2, out0: loc_output0, out1: loc_output1, count } ));
                 },
                 PersistentConsumerProducerState::S1 { stream0, stream1, stream2, out0, out1, count, data } => {

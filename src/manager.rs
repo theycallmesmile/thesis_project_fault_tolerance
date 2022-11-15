@@ -1,5 +1,6 @@
 use tokio::sync::oneshot;
 
+use core::panic;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -66,6 +67,7 @@ pub enum ManagerToTaskMessage {
 
 //Manager state with channels used for commincation between the operators and manager operator
 pub struct Manager {
+    areas: HashMap<u64, String>,
     state_chan_push: PushChan<PersistentTaskToManagerMessage>,
     state_chan_pull: PullChan<PersistentTaskToManagerMessage>,
     marker_chan_hash: HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)>,//Vec<(PushChan<Event<()>>, PullChan<Event<()>>)>,
@@ -88,6 +90,8 @@ pub enum Task {
 
 #[derive(Debug)]
 pub struct Context {
+    pub operator_id: i32,
+    pub areas: HashMap<u64, String>,
     pub marker_manager_recv: Option<PullChan<Event<()>>>,
     pub state_manager_send: PushChan<PersistentTaskToManagerMessage>,
 }
@@ -141,7 +145,6 @@ impl Manager {
         let mut operator_counter = 0;
         let mut marker_id = 1;
         let mut partial_snapshot_hashset: HashMap<i32, Vec<PartialPersistentConsumerProducerState>> = HashMap::new();
-
         
         let mut timer_now = Instant::now();
         let mut total_time = Instant::now();
@@ -158,7 +161,7 @@ impl Manager {
             }
             timer_now = Instant::now();
             println!("Sending new messages with marker.");
-            if(benchmarking_timer_iteration.len() < 5){
+            if(benchmarking_timer_iteration.len() < 5) {
                 //self.send_messages_markers(100).await;
                 self.send_message_both_ways(200, &mut marker_id).await;         
                 //self.send_message_both_ways(1000, &mut marker_id).await;
@@ -169,7 +172,6 @@ impl Manager {
                 //self.send_messages_markers_inverted(30000).await;
                 //self.send_messages_markers(100).await;
                 self.send_last_message().await;
-                
             }
             loop {
                 tokio::select! {
@@ -210,7 +212,6 @@ impl Manager {
 
                                         old_highest_marker = m_id;
                                     }
-
                                     //removing the saved checkpoint from the hashmap!
                                     serde_state.persistent_task_map.remove_entry(&m_id);
                                     partial_snapshot_hashset.remove_entry(&m_id);
@@ -243,26 +244,26 @@ impl Manager {
         } 
     }   
     }
-    
-    async fn send_message_test(&self, amount: i32, marker_id: &mut i32){
+
+    async fn send_message_test(&self, amount: i32, marker_id: &mut i32) {
         let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
         marker_keys.sort();
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
         self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id)).await;
 
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
         self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id)).await;
 
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
         self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id)).await;
 
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount*2))).await;
         self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
 
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount*2))).await;
         self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
 
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
         self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
         println!("DONE SENDING LAST MESSAGE!");
     }
@@ -273,13 +274,13 @@ impl Manager {
         println!("MARKER_KEYS: {:?}", marker_keys);
         for n in 0..4{
 
-            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
         }
         *marker_id += 4;
@@ -291,24 +292,24 @@ impl Manager {
         println!("MARKER_KEYS: {:?}", marker_keys);
         for n in 0..4{
 
-            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
             *marker_id += 1;
         
-            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount*2))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount*2)).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount*2))).await;
             self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount)).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
         }
         *marker_id += 4;
@@ -319,13 +320,13 @@ impl Manager {
         marker_keys.sort();
         println!("MARKER_KEYS: {:?}", marker_keys);
         
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
         self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id)).await;
         
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(amount)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
         self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id)).await;
         
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(amount+3)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount+3))).await;
         self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id)).await;
         println!("DONE SENDING MESSAGES AND MARKERS!");
     }
@@ -333,11 +334,11 @@ impl Manager {
     async fn send_last_message(&self){
         let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
         marker_keys.sort();
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(0)).await;
+        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("end_of_stream".to_string(), 0))).await;
         
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(0)).await;
+        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("end_of_stream".to_string(), 0))).await;
         
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(0)).await;
+        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("end_of_stream".to_string(), 0))).await;
         println!("DONE SENDING LAST MESSAGE!");
     }
 
@@ -365,12 +366,15 @@ pub async fn spawn_operators(
     let mut task_op_spawn_vec = Vec::new();
     let mut marker_vec_counter = 0;
 
-    init_channels_modified(
+    
+
+    /*let mut operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = init_channels(
         &operator_connections,
         &mut operator_channel,
         &mut operator_state_chan,
-    ).await;
-    let mut operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = init_channels_modified(
+    ).await;*/
+
+    let (producer_channels, consumer_producer_channels) = init_channels(
         &operator_connections,
         &mut operator_channel,
         &mut operator_state_chan,
@@ -382,10 +386,12 @@ pub async fn spawn_operators(
         match operator { //SourceProducer(0)
             Operators::SourceProducer(operator_id) => {
                 let prod_state = ProducerState::S0 {
-                    out0: operator_pullpush.get(&(operator, Operators::ConsumerProducer(0))).unwrap().0.to_owned(),
+                    out0: producer_channels.get(&(operator, Operators::ConsumerProducer(0))).unwrap().0.to_owned(),
                     count: 0,
                 };
                 let prod_ctx = Context {
+                    operator_id,
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: Some(
                         self_manager.marker_chan_hash.get(&operator_id).unwrap().1.clone(),
                     ),
@@ -395,28 +401,32 @@ pub async fn spawn_operators(
                 task_op_spawn_vec.push(prod_task.spawn(prod_ctx));
                 marker_vec_counter += 1;
             }
-            Operators::Consumer(_) => {
+            Operators::Consumer(operator_id) => {
                 let cons_state = ConsumerState::S0 {
-                    stream0: operator_pullpush.get(&(Operators::ConsumerProducer(0),operator)).unwrap().1.to_owned(),
+                    stream0: consumer_producer_channels.get(&(Operators::ConsumerProducer(0),operator)).unwrap().1.to_owned(),
                     count: 0,
                 };
                 let cons_ctx = Context {
+                    operator_id,
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: None,
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
                 let cons_task = Task::Consumer(cons_state);
                 task_op_spawn_vec.push(cons_task.spawn(cons_ctx));
             }
-            Operators::ConsumerProducer(_) => {
+            Operators::ConsumerProducer(operator_id) => {
                 let cons_prod_state = ConsumerProducerState::S0 {
-                    stream0: operator_pullpush.get(&(Operators::SourceProducer(0),operator.clone())).unwrap().1.to_owned(),
-                    stream1: operator_pullpush.get(&(Operators::SourceProducer(1),operator.clone())).unwrap().1.to_owned(),
-                    stream2: operator_pullpush.get(&(Operators::SourceProducer(2),operator.clone())).unwrap().1.to_owned(),
-                    out0: operator_pullpush.get(&(operator.clone(), Operators::Consumer(0))).unwrap().0.to_owned(),
-                    out1: operator_pullpush.get(&(operator.clone(), Operators::Consumer(1))).unwrap().0.to_owned(),
+                    stream0: producer_channels.get(&(Operators::SourceProducer(0),operator.clone())).unwrap().1.to_owned(),
+                    stream1: producer_channels.get(&(Operators::SourceProducer(1),operator.clone())).unwrap().1.to_owned(),
+                    stream2: producer_channels.get(&(Operators::SourceProducer(2),operator.clone())).unwrap().1.to_owned(),
+                    out0: consumer_producer_channels.get(&(operator.clone(), Operators::Consumer(0))).unwrap().0.to_owned(),
+                    out1: consumer_producer_channels.get(&(operator.clone(), Operators::Consumer(1))).unwrap().0.to_owned(),
                     count: 0,
                 };
                 let cons_prod_ctx = Context {
+                    operator_id,
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: None,
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
@@ -428,24 +438,39 @@ pub async fn spawn_operators(
     task_op_spawn_vec
 }
 
-async fn init_channels_modified(
+async fn init_channels(
     operator_connections: &HashMap<Operators, Vec<Operators>>,
     operator_channel: &mut HashMap<Operators, Vec<(PushChan<Event<i32>>, PullChan<Event<i32>>)>>,
     operator_state_chan: &mut HashMap<Operators, Vec<OperatorChannels>>,
-) -> HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)>{
+) -> (
+    HashMap<(Operators,Operators),(PushChan<Event<(u64, u64)>>, PullChan<Event<(u64, u64)>>)>,
+    HashMap<(Operators,Operators),(PushChan<Event<(String, String)>>, PullChan<Event<(String, String)>>)>){
     //creating channels for source producers and consumer_producers. Every prod/con_prod will have a separate channel with connected operator
-    //create as a new func?
-    let mut latest_operator_pullpush: HashMap<(Operators,Operators),(PushChan<Event<i32>>, PullChan<Event<i32>>)> = HashMap::new();
+    let mut producer_operator_channel: HashMap<(Operators,Operators),(PushChan<Event<(u64, u64)>>, PullChan<Event<(u64, u64)>>)> = HashMap::new();
+    let mut consumer_producer_operator_channel: HashMap<(Operators,Operators),(PushChan<Event<(String, String)>>, PullChan<Event<(String, String)>>)> = HashMap::new(); 
 
     for connection in operator_connections {
-        let mut count = 0;
-        let chan_vec = channel_vec::<Event<i32>>(connection.1.clone().len());
-        for operator_connection_value in connection.1{
-            latest_operator_pullpush.insert((connection.0.clone(), operator_connection_value.clone()), chan_vec[count].to_owned());
-            count += 1;
+        match connection.0 {
+            Operators::SourceProducer(_) => {
+                let mut count = 0;
+                let chan_vec = channel_vec::<Event<(u64, u64)>>(connection.1.clone().len());
+                for operator_connection_value in connection.1 {
+                    producer_operator_channel.insert((connection.0.clone(), operator_connection_value.clone()), chan_vec[count].to_owned());
+                    count += 1;
+                }
+            },
+            Operators::Consumer(_) => panic!(),
+            Operators::ConsumerProducer(_) => {
+                let mut count = 0;
+                let chan_vec = channel_vec::<Event<(String, String)>>(connection.1.clone().len());
+                for operator_connection_value in connection.1 {
+                    consumer_producer_operator_channel.insert((connection.0.clone(), operator_connection_value.clone()), chan_vec[count].to_owned());
+                    count += 1;
+                }
+            },
         }
     }
-    latest_operator_pullpush
+    (producer_operator_channel, consumer_producer_operator_channel)
 }
 
 
@@ -485,6 +510,8 @@ async fn respawn_operator(
         let handle = match task {
             Task::Consumer(_) => {
                 let cons_ctx = Context {
+                    operator_id: todo!(), 
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: None,
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
@@ -492,6 +519,8 @@ async fn respawn_operator(
             }
             Task::Producer(operator_id) => {
                 let prod_ctx = Context {
+                    operator_id: todo!(),
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: Some(
                         panic!(), // FIX THE OPERATOR_ID !!!!!!!!!!!!!!!!!!!!!!!!! should be similar to how its during initial creation/spawning
                         //self_manager.marker_chan_hash.get(todo!()).unwrap().1.clone(), //todo!() should be replaced with operator_id
@@ -503,6 +532,8 @@ async fn respawn_operator(
             }
             Task::ConsumerProducer(_) => {
                 let cons_prod_ctx = Context {
+                    operator_id: todo!(),
+                    areas: self_manager.areas.clone(),
                     marker_manager_recv: None,
                     state_manager_send: self_manager.state_chan_push.clone(),
                 };
@@ -570,7 +601,142 @@ pub fn manager() {
 
     let marker_hash:HashMap<i32, (PushChan<Event<()>>, PullChan<Event<()>>)> = create_marker_chan_vec(&operator_connections); //HASHMAP TEX: {operator_nummer, (push/pull)} . {nummer, tupple}
 
+    let swedish_locality: HashMap<u64, String> = HashMap::from([(1, "Stockholm".to_string()),
+    (2, "Upplands Väsby".to_string()),
+    (3, "Södertälje".to_string()),
+    (4, "Lidingö".to_string()),
+    (5, "Tumba".to_string()),
+    (6, "Åkersberga".to_string()),
+    (7, "Vallentuna".to_string()),
+    (8, "Märsta".to_string()),
+    (9, "Gustavsberg".to_string()),
+    (10, "Norrtälje".to_string()),
+    (11, "Västerhaninge".to_string()),
+    (12, "Nynäshamn".to_string()),
+    (13, "Ekerö".to_string()),
+    (14, "Jordbro".to_string()),
+    (15, "Kungsängen".to_string()),
+    (16, "Saltsjöbaden".to_string()),
+    (17, "Sigtuna".to_string()),
+    (18, "Bro".to_string()),
+    (19, "Fisksätra".to_string()),
+    (20, "Järna".to_string()),
+    (21, "Vaxholm".to_string()),
+    (22, "Hallstavik".to_string()),
+    (23, "Brunna".to_string()),
+    (24, "Ösmo".to_string()),
+    (25, "Stenhamra".to_string()),
+    (26, "Resarö".to_string()),
+    (27, "Sticklinge".to_string()),
+    (28, "Vårsta".to_string()),
+    (29, "Norra_Riksten".to_string()),
+    (30, "Svinninge".to_string()),
+    (31, "Fågelvikshöjden".to_string()),
+    (32, "Kopparmora".to_string()),
+    (33, "Pershagen".to_string()),
+    (34, "Stavsnäs".to_string()),
+    (35, "Rosersberg".to_string()),
+    (36, "Dalarö".to_string()),
+    (37, "Djurö".to_string()),
+    (38, "Älmsta".to_string()),
+    (39, "Sorunda".to_string()),
+    (40, "Brunn".to_string()),
+    (41, "Steningehöjden".to_string()),
+    (42, "Långvik".to_string()),
+    (43, "Lindholmen".to_string()),
+    (44, "Rindö".to_string()),
+    (45, "Mölnbo".to_string()),
+    (46, "Älgö".to_string()),
+    (47, "Kil".to_string()),
+    (48, "Parksidan".to_string()),
+    (49, "Ekeby".to_string()),
+    (50, "Kullö".to_string()),
+    (51, "Viksäter".to_string()),
+    (52, "Ingaröstrand".to_string()),
+    (53, "Älvnäs".to_string()),
+    (54, "Vidja".to_string()),
+    (55, "Lugnet".to_string()),
+    (56, "Segersäng".to_string()),
+    (57, "Stora_Vika".to_string()),
+    (58, "Kungsberga".to_string()),
+    (59, "Hästängen".to_string()),
+    (60, "Håbo-Tibble_kyrkby".to_string()),
+    (61, "Gladö_Kvarn".to_string()),
+    (62, "Ölsta".to_string()),
+    (63, "Bammarboda".to_string()),
+    (64, "Löwenströmska_Lasarettet".to_string()),
+    (65, "Nyhagen".to_string()),
+    (66, "Älvsala".to_string()),
+    (67, "Ekerö_Sommarstad".to_string()),
+    (68, "Bergshamra".to_string()),
+    (69, "Arninge".to_string()),
+    (70, "Gräddö".to_string()),
+    (71, "Rydbo".to_string()),
+    (72, "Edsbro".to_string()),
+    (73, "Grödby".to_string()),
+    (74, "Kallfors".to_string()),
+    (75, "Hästhagen".to_string()),
+    (76, "Väländan".to_string()),
+    (77, "Svanberga".to_string()),
+    (78, "Kårsta".to_string()),
+    (79, "Östra Kallfors".to_string()),
+    (80, "Spånlöt".to_string()),
+    (81, "Spillersboda".to_string()),
+    (82, "Ängsvik".to_string()),
+    (83, "Solberga".to_string()),
+    (84, "Täljö".to_string()),
+    (85, "Årsta_Havsbad".to_string()),
+    (86, "Sandviken".to_string()),
+    (87, "Rånäs".to_string()),
+    (88, "Grisslehamn".to_string()),
+    (89, "Tranholmen".to_string()),
+    (90, "Tuna".to_string()),
+    (91, "Sundby".to_string()),
+    (92, "Vattubrinken".to_string()),
+    (93, "Herräng".to_string()),
+    (94, "Stava".to_string()),
+    (95, "Lidatorp".to_string()),
+    (96, "Sibble".to_string()),
+    (97, "Tynningö".to_string()),
+    (98, "Drottningholm".to_string()),
+    (99, "Nolsjö".to_string()),
+    (100, "Norra_Lagnö".to_string()),
+    (101, "Söderby".to_string()),
+    (102, "Södersvik".to_string()),
+    (103, "Ekskogen_Älgeby".to_string()),
+    (104, "Riala".to_string()),
+    (105, "Rättarboda".to_string()),
+    (106, "Sättra".to_string()),
+    (107, "Koviksudde".to_string()),
+    (108, "Betsede".to_string()),
+    (109, "Oxnö".to_string()),
+    (110, "Laggarsvik".to_string()),
+    (111, "Söderby".to_string()),
+    (112, "Ekskogen".to_string()),
+    (113, "Granby".to_string()),
+    (114, "Johannesudd".to_string()),
+    (115, "Skarpö".to_string()),
+    (116, "Nysättra".to_string()),
+    (117, "Baldersnäs".to_string()),
+    (118, "Finsta".to_string()),
+    (119, "Muskö".to_string()),
+    (120, "Norra_Vindö".to_string()),
+    (121, "Söderby-Karl".to_string()),
+    (122, "Östorp".to_string()),
+    (123, "Landfjärden".to_string()),
+    (124, "Nibble".to_string()),
+    (125, "Brottby".to_string()),
+    (126, "Stensättra".to_string()),
+    (127, "Blidö".to_string()),
+    (128, "Skebobruk".to_string()),
+    (129, "Lurudden".to_string()),
+    (130, "Northern_Muskö".to_string()),
+    (131, "Hilleshög".to_string()),
+    (132, "Lurudden".to_string())
+    ]);
+
     let manager_state = Manager {
+        areas: swedish_locality,
         state_chan_push: state_push, //channel for operator state, operator -> buffer
         state_chan_pull: state_pull, //channel for operator state, buffer -> manager
         marker_chan_hash: marker_hash, //all source producer marker channels
