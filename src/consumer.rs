@@ -64,6 +64,7 @@ impl ConsumerState {
                                     }
                                 }
                             }
+                            task::sleep(Duration::from_millis(20)).await;
                             let loc_count = count + 1;
                             ConsumerState::S0 { stream0, count: loc_count }
                         }

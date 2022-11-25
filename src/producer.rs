@@ -68,19 +68,19 @@ impl ProducerState {
                         Event::MessageAmount((message_type, amount)) => {
                             let mut loc_count = count; 
                             if(message_type == "taxi_customer".to_string()) {
-                                    send_message(&out0, amount, &mut loc_count).await;
+                                send_message(&out0, amount, &mut loc_count, 10).await;
                             }
                             else if (message_type == "taxi_driver".to_string()) {
-                                    send_message(&out0, amount, &mut loc_count).await;
-                                }
-                                else if (message_type == "bus".to_string()) {
-                                    println!("sending bus");
-                                    send_message(&out0, amount, &mut loc_count).await;
-                                }
-                                else if (message_type == "end_of_stream") {
-                                    out0.push(Event::Data((0, 0))).await;
-                                    println!("PRODUCER DONE--------------------");
-                                }
+                                send_message(&out0, amount, &mut loc_count, 10).await;
+                            }
+                            else if (message_type == "bus".to_string()) {
+                                println!("sending bus");
+                                send_message(&out0, amount, &mut loc_count, 60).await;
+                            }
+                            else if (message_type == "end_of_stream") {
+                                out0.push(Event::Data((0, 0))).await;
+                                println!("PRODUCER DONE--------------------");
+                            }
                             
                             ProducerState::S0 {
                                 out0,
@@ -94,11 +94,12 @@ impl ProducerState {
     }
 }
 
-pub async fn send_message(out: &PushChan<Event<(u64, u64)>>, amount: i32, count: &mut i32){ 
+pub async fn send_message(out: &PushChan<Event<(u64, u64)>>, amount: i32, count: &mut i32, sleep_amount: u64){ 
     let mut loc_count = *count;
     let mut data_counter:u64 = 1;
     for _ in 0..amount {
         let data = Event::Data((data_counter, data_counter + 1));
+        task::sleep(Duration::from_millis(sleep_amount)).await;
         out.push(data).await;
         loc_count += 1; 
         if (data_counter == 130){

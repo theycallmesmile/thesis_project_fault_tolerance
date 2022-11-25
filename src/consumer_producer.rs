@@ -377,7 +377,6 @@ impl ConsumerProducerState {
                     let in_event2 = stream2.pull_buff_log().await;
                     match in_event2 {
                         Event::Data(event_data_s2) => {
-                            println!("the data in consumer_producer: {:?}", event_data_s2);
                             if(event_data_s2.0 == 0){
                                 let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
                                 println!("CONSUMER_PRODUCER STREAM2 DONE!");
@@ -411,7 +410,6 @@ impl ConsumerProducerState {
                             let persistent_state = Task::ConsumerProducer(snapshot_state.clone()).to_partial_persistent_task().await;
                             println!("start ConsumerProducer snapshotting");
                             Shared::<()>::persistent_store(persistent_state, marker_id, &ctx).await;
-  
                             join!(out0.push(Event::Marker(marker_id)), out1.push(Event::Marker(marker_id)));
 
                             snapshot_state
@@ -599,7 +597,241 @@ impl ConsumerProducerState {
         let mut timer_now = Instant::now();
         println!("ConsumerProducer MODIFIED optimized ON!");
         loop {
-            //println!("self: {:?}", &self);
+            self = match self {
+                ConsumerProducerState::S0 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                } => {
+                    let in_event0 = stream0.pull_buff_log().await;
+                    match in_event0 {
+                        Event::Data(event_data_s0) => {
+                            ConsumerProducerState::S1 {
+                                stream0,
+                                stream1,
+                                stream2,
+                                out0,
+                                out1,
+                                count,
+                                data: event_data_s0,
+                            }
+                        }
+                        Event::Marker(marker_id) => {
+                            let loc_stream1 = drain_buffers(&stream1).await;
+
+                            let partial_snapshot_state = PartialConsumerProducerState::S0 {
+                                stream0: stream0.clone(), 
+                                stream1: loc_stream1.clone(), 
+                                out0: out0.clone(),
+                            };
+                            let persistent_state = Task::PartialConsumerProducer(partial_snapshot_state).to_partial_persistent_task().await;
+
+                            println!("start ConsumerProducer Stream0 Partial snapshotting");
+                            Shared::<()>::persistent_store(persistent_state, marker_id, &ctx).await;
+                            out0.push(Event::Marker(marker_id)).await;
+                            //println!("DONE WITH SNAPSHOTTING TESTING!");
+                            //Race for next state!
+                            //timer_now = Instant::now();
+                            let stream_selection = tokio::select! {
+                                _ = stream0.check_pull_length() => {
+                                    0
+                                },
+                                _ = stream2.check_pull_length() => {
+                                    2
+                                },
+                            };
+                            //println!("WINNER AFTER MARKER: {}", timer_now.elapsed().as_millis());
+                            if (stream_selection == 0){
+                                ConsumerProducerState::S0 {
+                                    stream0,
+                                    stream1: loc_stream1, 
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }
+                            else {
+                                ConsumerProducerState::S2 {
+                                    stream0,
+                                    stream1: loc_stream1, 
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }                           
+                        }
+                        Event::MessageAmount(_) => {
+                            panic!();
+                        },
+                    }
+                }
+                ConsumerProducerState::S1 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                    data,
+                } => {
+                    let in_event1 = stream1.pull_buff_log().await;
+
+                    match in_event1 {
+                        Event::Data(event_data_s1) => {                          
+                            if(event_data_s1.0 == 0){
+                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
+                                println!("CONSUMER_PRODUCER STREAM2 DONE!");
+                                next_state.0
+                            }
+                            else {
+                                let (valid, locations) = return_location(data, Some(event_data_s1), &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0.clone(), out1, count), out0.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0.clone(), out1, count).await
+                                } 
+                            }     
+                        }
+                        Event::Marker(marker_id) => {
+                            let loc_stream0 = drain_buffers(&stream0).await;
+
+                            let partial_snapshot_state = PartialConsumerProducerState::S1 {
+                                stream0: loc_stream0.clone(), 
+                                stream1: stream1.clone(), 
+                                out0: out0.clone(),
+                                data,
+                            };
+                            let persistent_state = Task::PartialConsumerProducer(partial_snapshot_state).to_partial_persistent_task().await;
+                            println!("start ConsumerProducer Stream 1 Partial snapshotting");
+                            Shared::<()>::persistent_store(persistent_state, marker_id, &ctx).await;
+                            out0.push(Event::Marker(marker_id)).await;
+                            
+
+                            //Race for next state!
+                            let stream_selection = tokio::select! {
+                                _ = stream0.check_pull_length() => {
+                                    0
+                                },
+                                _ = stream2.check_pull_length() => {
+                                    2
+                                },
+                            };
+                            if (stream_selection == 0){
+                                ConsumerProducerState::S0 {
+                                    stream0: loc_stream0,
+                                    stream1, 
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }
+                            else {
+                                ConsumerProducerState::S2 {
+                                    stream0: loc_stream0,
+                                    stream1,
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }
+                        }
+                        Event::MessageAmount(_) => {
+                            panic!();
+                        },
+                    }
+                }
+                ConsumerProducerState::S2 {
+                    stream0,
+                    stream1,
+                    stream2,
+                    out0,
+                    out1,
+                    count,
+                } => {
+                    let in_event2 = stream2.pull_buff_log().await;
+                    
+                    match in_event2 {
+                        Event::Data(event_data_s2) => {
+                            if(event_data_s2.0 == 0){
+                                let next_state =join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data(("end_of_stream".to_string(),"end_of_stream".to_string()))));
+                                println!("CONSUMER_PRODUCER STREAM2 DONE!");
+                                next_state.0
+                            }
+                            else {
+                                let (valid, locations) = return_location(event_data_s2, None, &ctx.areas).await;
+                                if(valid) {
+                                    let next_state = join!(race_next_state(stream0, stream1, stream2, out0, out1.clone(), count), out1.push(Event::Data((locations.0, locations.1))));
+                                    next_state.0
+                                } 
+                                else {
+                                    race_next_state(stream0, stream1, stream2, out0, out1.clone(), count).await
+                                }
+                            }
+                        }
+                        Event::Marker(marker_id) => {
+                            let partial_snapshot_state = PartialConsumerProducerState::S2 {
+                                stream2: stream2.clone(),
+                                out1: out1.clone(),
+                            };
+                            let persistent_state = Task::PartialConsumerProducer(partial_snapshot_state).to_partial_persistent_task().await;
+                            println!("start ConsumerProducer Partial Stream 2 snapshotting");
+                            Shared::<()>::persistent_store(persistent_state, marker_id, &ctx).await;
+                            out1.push(Event::Marker(marker_id)).await;
+
+                            //Race for next state!
+                            let stream_selection = tokio::select! {
+                                _ = stream0.check_pull_length() => {
+                                    0
+                                },
+                                _ = stream2.check_pull_length() => {
+                                    2
+                                },
+                            };
+                            //println!("WINNER: {}", stream_selection);
+                            if (stream_selection == 0){
+                                ConsumerProducerState::S0 {
+                                    stream0,
+                                    stream1, 
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }
+                            else {
+                                ConsumerProducerState::S2 {
+                                    stream0,
+                                    stream1,
+                                    stream2,
+                                    out0,
+                                    out1,
+                                    count,
+                                }
+                            }
+
+                        }
+                        Event::MessageAmount(_) => {
+                            panic!();
+                        },
+                    }
+                }
+            };
+        }
+    }
+
+    pub async fn execute_optimized_unrestricted_unblocking(mut self, ctx: Context) {
+        let mut timer_now = Instant::now();
+        println!("ConsumerProducer MODIFIED optimized ON!");
+        loop {
             self = match self {
                 ConsumerProducerState::S0 {
                     stream0,
@@ -918,3 +1150,8 @@ pub async fn return_location(in_0: (u64, u64), in_1_optional: Option<(u64, u64)>
         },
     }    
 }
+
+
+
+
+

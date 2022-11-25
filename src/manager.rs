@@ -119,7 +119,7 @@ impl Task {
         match self {
             Task::Consumer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
             Task::Producer(state) => async_std::task::spawn(state.execute_unoptimized(ctx)),
-            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_unoptimized_unrestricted(ctx)),
+            Task::ConsumerProducer(state) => async_std::task::spawn(state.execute_optimized_unrestricted(ctx)),
             Task::PartialConsumerProducer(_) => todo!(),
         }
     }
@@ -127,8 +127,10 @@ impl Task {
 
 impl Manager {
     async fn run(mut self, operator_connections: HashMap<Operators, Vec<Operators>>) {
-        let mut interval = time::interval(time::Duration::from_millis(600));
+        let mut interval = time::interval(time::Duration::from_millis(400));
         let mut snapshot_timeout_counter = 0;
+
+        let mut log_size:HashSet<i32> = HashSet::new();
 
         //creating hashmap and hashset
         let mut serde_state = SerdeState {
@@ -142,7 +144,6 @@ impl Manager {
         //init the operators and returns amount of spawned operato&mut rs
         let mut operator_spawn_vec = spawn_operators(&mut self, operator_connections).await;
         let mut operator_amount = operator_spawn_vec.len();
-        let mut operator_counter = 0;
         let mut marker_id = 1;
         let mut partial_snapshot_hashset: HashMap<i32, Vec<PartialPersistentConsumerProducerState>> = HashMap::new();
         
@@ -152,26 +153,31 @@ impl Manager {
         let mut benchmarking_counter = 0;
         let mut old_highest_marker = 0;
         let mut sink_node_done = 0;
+        
+        let mut test_total_messages = 0; //remove
+
+        //warmup
+        let mut warmup_bool = true;
+        self.warmup_messages(10).await;
+
         loop {
-            if(benchmarking_timer_iteration.len() == 10){
-                benchmarking_timer_iteration.pop_front();
-                let timer_avg = average(benchmarking_timer_iteration.clone());
-                println!("Whole vector without the first element: {:?}, the average: {:?}", benchmarking_timer_iteration, timer_avg);
-                break;
-            }
-            timer_now = Instant::now();
-            println!("Sending new messages with marker.");
-            if(benchmarking_timer_iteration.len() < 5) {
-                //self.send_messages_markers(100).await;
-                self.send_message_both_ways(200, &mut marker_id).await;         
-                //self.send_message_both_ways(1000, &mut marker_id).await;
-                //self.send_message_one_way(300,&mut marker_id).await;
-                //self.send_message_test(500, &mut marker_id).await;
-            }
-            else {
-                //self.send_messages_markers_inverted(30000).await;
-                //self.send_messages_markers(100).await;
-                self.send_last_message().await;
+            if (!warmup_bool){
+                if(benchmarking_timer_iteration.len() < 3) { //one way: 3*4 * amount*2 (or amount*4), both way: 3*4 * (amount + amount *2)  
+                    timer_now = Instant::now();
+                    //self.send_message_one_way(50, &mut marker_id, &mut test_total_messages).await;
+                    self.send_message_both_ways(200, &mut marker_id, &mut test_total_messages).await;
+                    //self.send_message_both_ways_even(50, &mut marker_id, &mut test_total_messages).await;
+                }
+                else {
+                    if(benchmarking_timer_iteration.len() == 3){
+                        println!("Total runtime before last message: {:?}.", total_time.elapsed().as_millis());
+                        self.send_last_message().await;
+                    }
+                    else {
+                        println!("Total runtime: {:?}. amount:{:?}", total_time.elapsed().as_millis(), test_total_messages);
+                        break;
+                    }
+                }
             }
             loop {
                 tokio::select! {
@@ -183,7 +189,7 @@ impl Manager {
                             }
 
                             //resetting the values
-                            self.reset_values(&mut operator_amount, operator_spawn_vec.len(), &mut operator_counter, &mut snapshot_timeout_counter, &mut serde_state).await;
+                            //self.reset_values(&mut operator_amount, operator_spawn_vec.len(), &mut operator_counter, &mut snapshot_timeout_counter, &mut serde_state).await;
                             let loaded_checkpoint = load_persistent().await; //the json string
                             println!("Loaded checkpoint: {:?}",loaded_checkpoint);
                             serialize_task_vec = load_deserialize(loaded_checkpoint, &mut serde_state.deserialised).await; //deserialized checkpoint vec
@@ -199,15 +205,13 @@ impl Manager {
                         match msg {
                             PersistentTaskToManagerMessage::Serialise(state, m_id, promise) => {
                                 snapshot_timeout_counter = 0;
-                                operator_counter +=1;
-                                promise.send(8);
+                                promise.send(m_id as u64);
                                 populate_persistent_task_map(state.clone(), m_id, &mut serde_state.persistent_task_map, &mut partial_snapshot_hashset).await;
                                 
                                 if (serde_state.persistent_task_map.get(&m_id).unwrap().len() == operator_amount){
                                     benchmarking_counter += 1;
                                     if (m_id > old_highest_marker){
                                         serialize_state(serde_state.persistent_task_map.get(&m_id).unwrap()).await;
-                                        //self.reset_values(...);
                                         println!("Whole vector element without the last yet: {:?}, elapsed time: {:?}", benchmarking_timer_iteration, timer_now.elapsed().as_millis());
 
                                         old_highest_marker = m_id;
@@ -225,73 +229,73 @@ impl Manager {
                                         break;
                                     }
                                 }                                
-                        }
+                        },
                         PersistentTaskToManagerMessage::Benchmarking(promise) => {
                             sink_node_done += 1;
                             if (sink_node_done == 2){
-                                println!("Total runtime: {:?}.\nBenchmarking times in each iteration: {:?}", total_time.elapsed().as_millis(), benchmarking_timer_iteration);
+                                println!("Total runtime: {:?}.\nBenchmarking times in each iteration: {:?}. tot amount: {}", total_time.elapsed().as_millis(), benchmarking_timer_iteration,test_total_messages);
                                 promise.send(sink_node_done-1);
-                                task::sleep(Duration::from_secs(1000)).await;
+                                if(warmup_bool){
+                                    println!("DONE WITH WARMUP!");
+                                    warmup_bool = false;
+                                    old_highest_marker = 0;
+                                    benchmarking_counter = 0;
+                                    sink_node_done = 0;
+                                    total_time = Instant::now();
+                                    break;
+                                }
+                                else {
+                                    println!("Sleeping now!");
+                                    task::sleep(Duration::from_secs(1000)).await;
+                                }
                             }
-                            else{
+                            else {
                                 promise.send(sink_node_done-1);
-                            }
-                            
+                            }  
                         },
                     };
-                },
-            }
-        } 
-    }   
+                    },
+                }
+            } 
+        }   
     }
 
-    async fn send_message_test(&self, amount: i32, marker_id: &mut i32) {
-        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
-        marker_keys.sort();
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id)).await;
-
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id)).await;
-
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id)).await;
-
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount*2))).await;
-        self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
-
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount*2))).await;
-        self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
-
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
-        self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id+1)).await;
-        println!("DONE SENDING LAST MESSAGE!");
-    }
-
-    async fn send_message_one_way(&self, amount: i32, marker_id: &mut i32) {
+    async fn send_message_both_ways_even(&self, amount: i32, marker_id: &mut i32, nn: &mut i32) {
         let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
         marker_keys.sort();
         println!("MARKER_KEYS: {:?}", marker_keys);
         for n in 0..4{
-
+            *nn += amount;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
             self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
-            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            *marker_id += 1;
+            
+            *nn += (amount *2);
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
         }
         *marker_id += 4;
     }
 
-    async fn send_message_both_ways(&self, amount: i32, marker_id: &mut i32) {
+    async fn send_message_one_way(&self, amount: i32, marker_id: &mut i32, nn: &mut i32) {
         let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
         marker_keys.sort();
         println!("MARKER_KEYS: {:?}", marker_keys);
         for n in 0..4{
-
+            *nn += amount*2;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
@@ -302,7 +306,37 @@ impl Manager {
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
             *marker_id += 1;
-        
+            *nn += amount*2;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+        }
+        *marker_id += 4;
+    }
+
+    async fn send_message_both_ways(&self, amount: i32, marker_id: &mut i32, nn: &mut i32) {
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+        println!("MARKER_KEYS: {:?}", marker_keys);
+        for n in 0..4{
+            *nn += amount;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount*2))).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
+            
+            *marker_id += 1;
+            
+            *nn += (amount *2);
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount*2))).await;
             self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
             
@@ -313,6 +347,23 @@ impl Manager {
             self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(*marker_id + n)).await;
         }
         *marker_id += 4;
+    }
+
+    async fn warmup_messages(&self, amount: i32) {
+        let mut marker_keys:Vec<i32> = self.marker_chan_hash.to_owned().into_keys().collect();
+        marker_keys.sort();
+
+        for n in 0..4{
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::MessageAmount(("taxi_customer".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[0]).unwrap().0.push(Event::Marker(0 + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::MessageAmount(("taxi_driver".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[1]).unwrap().0.push(Event::Marker(0 + n)).await;
+            
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::MessageAmount(("bus".to_string(), amount))).await;
+            self.marker_chan_hash.get(&marker_keys[2]).unwrap().0.push(Event::Marker(0 + n)).await;
+        }
+        self.send_last_message().await;
     }
 
     async fn send_test(&self, amount: i32, marker_id: &mut i32){
